@@ -1,0 +1,37 @@
+# proxy-sticky 配置示例（复制为 config.yaml 并修改）
+listen: "0.0.0.0:26184"          # SOCKS5 监听（避开 sing-box 26183 或先停用其 socks5-in）
+password: "CHANGE_ME"            # 共享密码，与客户端 socks5 密码一致
+default_account: "43b3277e"      # 不带后缀的用户名 -> 随机出口走 numgen 池
+default_tunnel: "route64"        # 默认隧道名（对应 tunnels[].name）
+manage_wg: true                  # 接口未运行时自动 wg-quick up
+
+# state 文件：记录 username -> 粘性地址
+state_file: "state/accounts.json"
+
+# 预置账号（兼容旧 acc1/acc2；地址必须在隧道前缀内）
+seed_accounts:
+  "43b3277e.acc1": "2a11:6c7:f09:b::11"
+  "43b3277e.acc2": "2a11:6c7:f09:b::12"
+
+tunnels:
+  - name: "route64"              # wg 接口名 / 路由表 / mark 均以此关联
+    wg_conf: "wg/route64.conf"   # 原始 wg-quick 配置（含 PrivateKey/Peer/Address）
+    table: 64                    # 路由表号（策略路由 lookup）
+    mark: 0x40                 # SO_MARK 值（低 8 位必须与 ip rule fwmark 掩码一致）
+    pool_size: 4096              # 随机出口池大小（默认账号使用）
+    pool_start: "::10"           # 池起始 IID（低位 64 位）
+    sticky_start: "::2000"       # 粘性账号分配起点（独立区间，避免与池重叠）
+
+# 多隧道示例：第二份 wg 配置 + 独立表/mark（自动生成各自 nft 表）
+#  - name: "route64-b"
+#    wg_conf: "wg/route64-b.conf"
+#    table: 65
+#    mark: 0x41
+#    pool_size: 2048
+#    pool_start: "::10"
+#    sticky_start: "::2000"
+
+connect_timeout: 15s
+idle_timeout: 10m                # 0 = 不设空闲超时
+max_conns: 4096
+log_level: "info"

@@ -1,0 +1,9 @@
+# 敏感：不可上传
+config.yaml                # 含 SOCKS 共享密码
+wg/*.conf                  # 含 WireGuard 私钥
+state/                     # 账号粘性映射
+runtime/                   # 生成的 nft 规则
+backups/                   # 生产配置备份
+bin/                       # 编译产物
+*.log                      # 运行日志
+/tmp/
