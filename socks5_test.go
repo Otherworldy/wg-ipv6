@@ -67,6 +67,11 @@ func TestParseAccount(t *testing.T) {
 	if err != nil || !a.sticky || a.tun.Conf.Name != "route64-b" {
 		t.Fatalf("tunnel sticky: %+v %v", a, err)
 	}
+	// 仅隧道名 -> 该隧道随机
+	a, err = s.parseAccount("43b3277e.route64-b")
+	if err != nil || a.sticky || a.tun.Conf.Name != "route64-b" {
+		t.Fatalf("tunnel random: %+v %v", a, err)
+	}
 	if _, err := s.parseAccount("nobody"); err == nil {
 		t.Fatal("expected reject")
 	}

@@ -85,6 +85,10 @@ func (s *Server) parseAccount(username string) (account, error) {
 	if rest == "" {
 		return account{}, fmt.Errorf("empty account id")
 	}
+	// 仅隧道名（如 f1b272af.route64-2）-> 该隧道随机出口
+	if t, found := s.tunnels[rest]; found {
+		return account{tun: t, sticky: false}, nil
+	}
 	if a, b, ok := strings.Cut(rest, "."); ok {
 		if t, found := s.tunnels[a]; found {
 			if b == "" {
