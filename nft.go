@@ -77,17 +77,25 @@ func (t *Tunnel) LoadNFT(projectDir string) error {
 // TakeoverLegacy 接管所有旧 route64_random* 生产表（route64_random/
 // route64_random_2 等）：逐个备份到 backups/ 后删除。
 // 否则旧表与程序表同 hook 都会被触发，粘性源地址会被旧 numgen 规则 SNAT。
+// isLegacyRandom 判断旧裂变表名：route64 开头且含 random
+// （route64_random / route64_random_2 / route64_r1mci_random / route64_r1ash_random ...）
+func isLegacyRandom(name string) bool {
+	return strings.HasPrefix(name, "route64") && strings.Contains(name, "random")
+}
+
 func TakeoverLegacy(projectDir string) error {
 	out, err := exec.Command("nft", "list", "tables", "ip6").Output()
-	if err != nil || !strings.Contains(string(out), "route64_random") {
-		return nil // 旧表不存在
+	if err != nil {
+		return err
 	}
-	// 提取表名（含 route64_random 前缀）
+	// 提取所有旧裂变表
 	var tables []string
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "table ip6 ") && strings.Contains(line, "route64_random") {
-			tables = append(tables, strings.TrimPrefix(line, "table ip6 "))
+		if strings.HasPrefix(line, "table ip6 ") {
+			if n := strings.TrimPrefix(line, "table ip6 "); isLegacyRandom(n) {
+				tables = append(tables, n)
+			}
 		}
 	}
 	if len(tables) == 0 {
