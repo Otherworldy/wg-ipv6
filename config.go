@@ -26,6 +26,8 @@ type (
 		ConnectTimeout time.Duration     `yaml:"connect_timeout"`
 		IdleTimeout    time.Duration     `yaml:"idle_timeout"`
 		AccountIdleTTL time.Duration     `yaml:"account_idle_ttl"` // 粘性账号闲置回收（0=禁用）
+		Ephemeral      bool              `yaml:"ephemeral"`        // 默认账号全 /64 随机 IID
+		EphemeralGrace time.Duration     `yaml:"ephemeral_grace"`  // 临时地址延迟删除时长
 		LogLevel       string            `yaml:"log_level"`
 		BaseDir        string            `yaml:"-"`
 	}
@@ -74,6 +76,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
+	}
+	if c.EphemeralGrace <= 0 {
+		c.EphemeralGrace = 60 * time.Second
 	}
 	for i := range c.Tunnels {
 		t := &c.Tunnels[i]

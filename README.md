@@ -14,7 +14,8 @@ client --SOCKS5(用户名/共享密码)--> proxy-sticky --[bind 源地址+SO_MAR
 ```
 
 - 粘性账号：`store.Allocate()` 分配 `sticky_start` 起递增的 `/128` → `ip addr replace` 到 wg 接口（幂等、缓存）→ 连接绑定该地址 + `mark` + `bindtodevice` → nft 表第一条规则 `saddr != base → accept` 跳过随机 SNAT
-- 默认账号：绑定隧道基础地址 `base`（如 `::2`）→ nft 表第二条规则 `meta mark → snat to numgen random mod N map` 每个新连接随机出口
+- 默认账号（`ephemeral: true`，默认）：**每个新连接从整个 `/64` 随机生成 IID**（crypto/rand 64bit，`2^64` 空间），rtnetlink 直调 `ip addr add`（无 fork 纯 syscall）→ 绑定该随机地址 → 连接关闭后延迟 `ephemeral_grace`（默认 60s）删除，覆盖 conntrack 回程窗口。nft 表 `saddr != base → accept` 规则天然放行，不再经过 numgen 池；addr 冲突（EEXIST）自动重试，netlink 异常回退基础地址保可用
+- 默认账号（`ephemeral: false`）：绑定隧道基础地址 `base`（如 `::2`）→ nft 表 numgen 随机 SNAT（有限池）
 - 多份 WG：每份 conf 一个隧道，独立 `table`/`mark`/`pool`/nft 表；用户名 `43b3277e.<tunnel>.<id>` 指定隧道
 
 ## 目录

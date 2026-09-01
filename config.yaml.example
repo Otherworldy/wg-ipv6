@@ -31,6 +31,13 @@ tunnels:
 #    pool_start: "::10"
 #    sticky_start: "::2000"
 
+# 粘性账号闲置回收（0=禁用）
+account_idle_ttl: 720h
+
+# 默认账号出口：true = 每个新连接全 /64 随机 IID（临时地址，延迟删除）
+ephemeral: true
+ephemeral_grace: 60s             # 临时地址延迟删除时长
+
 connect_timeout: 15s
 idle_timeout: 10m                # 0 = 不设空闲超时
 max_conns: 4096

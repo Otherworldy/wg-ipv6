@@ -39,6 +39,7 @@ type Server struct {
 
 	ensuredMu sync.Mutex
 	ensured   map[string]bool // 已确认在接口上的粘性地址
+	eph       *Ephemeral      // 默认账号全随机（nil = 走 numgen 池）
 }
 
 func NewServer(cfg *Config, store *Store, tunnels []*Tunnel, logger *log.Logger) *Server {
@@ -50,11 +51,15 @@ func NewServer(cfg *Config, store *Store, tunnels []*Tunnel, logger *log.Logger)
 			def = t
 		}
 	}
-	return &Server{
+	s := &Server{
 		cfg: cfg, store: store, tunnels: m, defTun: def,
 		log: logger, sem: make(chan struct{}, cfg.MaxConns),
 		ensured: map[string]bool{},
 	}
+	if cfg.Ephemeral {
+		s.eph = NewEphemeral(cfg.EphemeralGrace)
+	}
+	return s
 }
 
 // account 解析后的一次拨号身份
@@ -94,6 +99,9 @@ func (s *Server) parseAccount(username string) (account, error) {
 // resolve 返回：粘性账号 -> 已绑定地址；默认 -> 隧道基础地址（由 nft 随机 SNAT）。
 func (s *Server) resolve(a account) (netip.Addr, error) {
 	if !a.sticky {
+		if s.eph != nil {
+			return s.eph.Acquire(a.tun)
+		}
 		return a.tun.Base, nil
 	}
 	addr, err := s.store.Allocate(a.tun, a.name)
@@ -200,6 +208,9 @@ func (s *Server) proxy(client net.Conn, acc account, req Request) {
 		s.log.Printf("resolve %s: %v", acc.name, err)
 		s.writeReply(client, repGeneral)
 		return
+	}
+	if !acc.sticky && s.eph != nil {
+		defer s.eph.Release(acc.tun, src)
 	}
 	remote, err := dialTcp(ctx, src, acc.tun.Conf.Mark, acc.tun.Conf.Name, req.Host, s.cfg.ConnectTimeout)
 	if err != nil {
