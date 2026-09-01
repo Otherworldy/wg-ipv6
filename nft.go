@@ -52,6 +52,9 @@ func (t *Tunnel) WriteNFT(projectDir string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(projectDir, "runtime", t.nftName()+".nft")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return "", err
 	}
@@ -71,27 +74,41 @@ func (t *Tunnel) LoadNFT(projectDir string) error {
 	return nil
 }
 
-// TakeoverLegacy 接管旧的 route64_random 生产表：备份到 backups/ 后删除。
+// TakeoverLegacy 接管所有旧 route64_random* 生产表（route64_random/
+// route64_random_2 等）：逐个备份到 backups/ 后删除。
 // 否则旧表与程序表同 hook 都会被触发，粘性源地址会被旧 numgen 规则 SNAT。
 func TakeoverLegacy(projectDir string) error {
 	out, err := exec.Command("nft", "list", "tables", "ip6").Output()
 	if err != nil || !strings.Contains(string(out), "route64_random") {
 		return nil // 旧表不存在
 	}
+	// 提取表名（含 route64_random 前缀）
+	var tables []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "table ip6 ") && strings.Contains(line, "route64_random") {
+			tables = append(tables, strings.TrimPrefix(line, "table ip6 "))
+		}
+	}
+	if len(tables) == 0 {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Join(projectDir, "backups"), 0o755); err != nil {
 		return err
 	}
-	bak := filepath.Join(projectDir, "backups",
-		fmt.Sprintf("route64_random.%s.nft", time.Now().Format("20060102-150405")))
-	list, err := exec.Command("nft", "list", "table", "ip6", "route64_random").Output()
-	if err != nil {
-		return fmt.Errorf("list legacy table: %w", err)
-	}
-	if err := os.WriteFile(bak, list, 0o600); err != nil {
-		return err
-	}
-	if _, err := exec.Command("nft", "delete", "table", "ip6", "route64_random").CombinedOutput(); err != nil {
-		return fmt.Errorf("delete legacy table: %w", err)
+	ts := time.Now().Format("20060102-150405")
+	for _, name := range tables {
+		list, err := exec.Command("nft", "list", "table", "ip6", name).Output()
+		if err != nil {
+			return fmt.Errorf("list legacy table %s: %w", name, err)
+		}
+		bak := filepath.Join(projectDir, "backups", name+"."+ts+".nft")
+		if err := os.WriteFile(bak, list, 0o600); err != nil {
+			return err
+		}
+		if _, err := exec.Command("nft", "delete", "table", "ip6", name).CombinedOutput(); err != nil {
+			return fmt.Errorf("delete legacy table %s: %w", name, err)
+		}
 	}
 	return nil
 }

@@ -117,7 +117,15 @@ func firstV6Address(conf string) (netip.Prefix, error) {
 
 func (t *Tunnel) rulePref() int { return 10000 + t.Conf.Table }
 
-func (t *Tunnel) nftName() string { return "route64_proxy_" + t.Conf.Name }
+func (t *Tunnel) nftName() string {
+	name := strings.Map(func(r rune) rune {
+		if r == '-' {
+			return '_'
+		}
+		return r
+	}, t.Conf.Name)
+	return "route64_proxy_" + name
+}
 
 // GenerateRuntimeConf 生成 wg-quick 运行时配置：接管 Table/PostUp/PostDown。
 // 原始文件不修改；/etc/wireguard/<name>.conf 有变化时先备份并写入。

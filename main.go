@@ -136,6 +136,10 @@ func main() {
 		}
 	}
 
+	// 启动清理：删除接口上不属于 base 且不在粘性记录中的 /128
+	// （ephemeral 临时地址在进程退出/重启时可能残留，vless 源地址选择会因此绕过 numgen 随机）
+	PruneStaleAddrs(tunnels, store)
+
 	srv := NewServer(cfg, store, tunnels, logger)
 
 	// 粘性账号闲置回收：脱敏，跳过 seed 账号
@@ -208,4 +212,29 @@ func redact(s string) string {
 		return "***"
 	}
 	return s[:4] + "..." + s[len(s)-4:]
+}
+
+// PruneStaleAddrs 启动时清理接口上的非基础、不在 state 记录中的 /128 地址。
+func PruneStaleAddrs(tunnels []*Tunnel, store *Store) {
+	kept := map[string]bool{}
+	for _, r := range store.records {
+		kept[r.Addr] = true
+	}
+	for _, t := range tunnels {
+		out, _ := exec.Command("ip", "-6", "-o", "addr", "show", "dev", t.Conf.Name).Output()
+		for _, line := range strings.Split(string(out), "\n") {
+			f := strings.Fields(line)
+			if len(f) < 4 || !strings.Contains(f[3], ":") {
+				continue
+			}
+			a := f[3] // 形如 2a11:...::2/64
+			addrStr := strings.Split(a, "/")[0]
+			if addrStr == t.Base.String() || kept[addrStr] {
+				continue
+			}
+			if _, err := exec.Command("ip", "-6", "addr", "del", a, "dev", t.Conf.Name).CombinedOutput(); err == nil {
+				log.Printf("pruned stale addr %s on %s", addrStr, t.Conf.Name)
+			}
+		}
+	}
 }
