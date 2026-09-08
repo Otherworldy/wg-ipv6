@@ -142,6 +142,9 @@ func main() {
 
 	srv := NewServer(cfg, store, tunnels, logger)
 
+	// 策略路由可能被云厂商网络刷新冲掉（只在启动时 EnsureRule 不够）
+	go ensureRuleLoop(logger, tunnels)
+
 	// 粘性账号闲置回收：脱敏，跳过 seed 账号
 	if cfg.AccountIdleTTL > 0 {
 		protected := make(map[string]bool, len(cfg.SeedAccounts))
@@ -234,6 +237,18 @@ func PruneStaleAddrs(tunnels []*Tunnel, store *Store) {
 			}
 			if _, err := exec.Command("ip", "-6", "addr", "del", a, "dev", t.Conf.Name).CombinedOutput(); err == nil {
 				log.Printf("pruned stale addr %s on %s", addrStr, t.Conf.Name)
+			}
+		}
+	}
+}
+
+func ensureRuleLoop(logger *log.Logger, tunnels []*Tunnel) {
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
+	for range tick.C {
+		for _, t := range tunnels {
+			if err := t.EnsureRule(); err != nil {
+				logger.Printf("ensure rule %s: %v", t.Conf.Name, err)
 			}
 		}
 	}
