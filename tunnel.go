@@ -135,21 +135,38 @@ func (t *Tunnel) GenerateRuntimeConf(projectDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var out []string
+	var filtered []string
 	for _, line := range strings.Split(string(raw), "\n") {
 		trim := strings.TrimSpace(line)
-		if strings.HasPrefix(trim, "PostUp") || strings.HasPrefix(trim, "PostDown") || strings.HasPrefix(trim, "Table") {
-			continue // 由程序接管
+		if strings.HasPrefix(trim, "PostUp") || strings.HasPrefix(trim, "PostDown") ||
+			strings.HasPrefix(trim, "PreUp") || strings.HasPrefix(trim, "PreDown") ||
+			strings.HasPrefix(trim, "Table") {
+			continue // 由程序接管；必须放在 [Interface] 内，不能追加到 [Peer] 后
 		}
-		out = append(out, line)
+		filtered = append(filtered, line)
 	}
 	pref := t.rulePref()
 	nftPath := filepath.Join(projectDir, "runtime", t.nftName()+".nft")
-	out = append(out, "Table = "+fmt.Sprintf("%d", t.Conf.Table))
-	out = append(out, fmt.Sprintf("PostUp = nft -f %s", nftPath))
-	out = append(out, fmt.Sprintf("PostUp = ip -6 rule add pref %d from all fwmark %#x/0xff lookup %d 2>/dev/null || true", pref, t.Conf.Mark, t.Conf.Table))
-	out = append(out, fmt.Sprintf("PostDown = ip -6 rule del pref %d from all fwmark %#x/0xff lookup %d 2>/dev/null || true", pref, t.Conf.Mark, t.Conf.Table))
-	out = append(out, fmt.Sprintf("PostDown = nft delete table ip6 %s 2>/dev/null || true", t.nftName()))
+	inject := []string{
+		"Table = " + fmt.Sprintf("%d", t.Conf.Table),
+		fmt.Sprintf("PostUp = nft -f %s", nftPath),
+		fmt.Sprintf("PostUp = ip -6 rule add pref %d from all fwmark %#x/0xff lookup %d 2>/dev/null || true", pref, t.Conf.Mark, t.Conf.Table),
+		fmt.Sprintf("PostDown = ip -6 rule del pref %d from all fwmark %#x/0xff lookup %d 2>/dev/null || true", pref, t.Conf.Mark, t.Conf.Table),
+		fmt.Sprintf("PostDown = nft delete table ip6 %s 2>/dev/null || true", t.nftName()),
+	}
+	var out []string
+	inserted := false
+	for _, line := range filtered {
+		if !inserted && strings.HasPrefix(strings.TrimSpace(line), "[Peer]") {
+			out = append(out, inject...)
+			out = append(out, "")
+			inserted = true
+		}
+		out = append(out, line)
+	}
+	if !inserted {
+		out = append(out, inject...)
+	}
 	out = append(out, "")
 	content := []byte(strings.Join(out, "\n"))
 
