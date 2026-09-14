@@ -203,17 +203,22 @@ func (t *Tunnel) EnsureUp(projectDir string, manage bool) error {
 }
 
 // EnsureRule：策略路由规则幂等（fwmark 低 8 位 + 对应路由表）。
+// iproute2 按 argv 解析，pref/fwmark/lookup 必须拆开，不能写成 "pref 10064" 一个参数。
 func (t *Tunnel) EnsureRule() error {
 	out, _ := exec.Command("ip", "-6", "rule", "show").Output()
 	needle := fmt.Sprintf("fwmark %#x/0xff lookup %d", t.Conf.Mark, t.Conf.Table)
 	if bytes.Contains(out, []byte(needle)) {
 		return nil
 	}
-	_, err := exec.Command("ip", "-6", "rule", "add",
-		fmt.Sprintf("pref %d", t.rulePref()), "from", "all",
-		fmt.Sprintf("fwmark %#x/0xff", t.Conf.Mark),
-		fmt.Sprintf("lookup %d", t.Conf.Table)).CombinedOutput()
-	return err
+	out, err := exec.Command("ip", "-6", "rule", "add",
+		"pref", fmt.Sprintf("%d", t.rulePref()),
+		"from", "all",
+		"fwmark", fmt.Sprintf("%#x/0xff", t.Conf.Mark),
+		"lookup", fmt.Sprintf("%d", t.Conf.Table)).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(out))
+	}
+	return nil
 }
 
 // EnsureAddr：幂等在接口上添加 /128（粘性账号出口地址）。
