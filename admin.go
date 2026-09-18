@@ -534,7 +534,7 @@ func (a *admin) listInbounds(w http.ResponseWriter, r *http.Request) {
 			"tag": tag, "type": asString(ib["type"]), "listen": asString(ib["listen"]),
 			"listen_port": port, "enabled": enabled, "outbound": obtag,
 			"tunnel": outboundBind(ob, obtag),
-			"reality": reality, "url": shareURLOf(a.cfg.SingBoxDir, port),
+			"reality": reality, "url": shareURLOf(a.cfg.SingBoxDir, port, ib),
 		}
 		rows = append(rows, row)
 	}

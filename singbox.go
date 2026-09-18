@@ -524,11 +524,95 @@ func removeShareURL(sbDir string, port int) {
 	_ = saveURLLines(sbDir, keep)
 }
 
-func shareURLOf(sbDir string, port int) string {
-	for _, line := range loadURLLines(sbDir) {
-		if sharePort(line) == port {
+func vmessUUID(line string) string {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "vmess://") {
+		return ""
+	}
+	raw := strings.TrimPrefix(line, "vmess://")
+	b, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		b, err = base64.RawStdEncoding.DecodeString(raw)
+	}
+	if err != nil {
+		return ""
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil {
+		return ""
+	}
+	return asString(m["id"])
+}
+
+func buildVmessURL(sbDir string, port int, ib map[string]any) string {
+	uuid, _ := inboundCreds(ib)
+	host := publicHost(sbDir)
+	tag := asString(ib["tag"])
+
+	m := map[string]any{
+		"v":    "2",
+		"ps":   tag,
+		"add":  host,
+		"port": strconv.Itoa(port),
+		"id":   uuid,
+		"aid":  "0",
+		"scy":  "auto",
+		"net":  "tcp",
+		"type": "none",
+	}
+	if tr, ok := ib["transport"].(map[string]any); ok {
+		if t := asString(tr["type"]); t != "" {
+			m["net"] = t
+		}
+		if p := asString(tr["path"]); p != "" {
+			m["path"] = p
+		}
+		if h := asString(tr["host"]); h != "" {
+			m["host"] = h
+		}
+	}
+	if tls, ok := ib["tls"].(map[string]any); ok {
+		if enabled, _ := tls["enabled"].(bool); enabled {
+			m["tls"] = "tls"
+			if sni := asString(tls["server_name"]); sni != "" {
+				m["sni"] = sni
+			}
+		}
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return "vmess://" + base64.StdEncoding.EncodeToString(b)
+}
+
+func shareURLOf(sbDir string, port int, ib map[string]any) string {
+	lines := loadURLLines(sbDir)
+	for _, line := range lines {
+		if sharePort(line) == port && port > 0 {
 			return line
 		}
+	}
+	uuid, _ := inboundCreds(ib)
+	typ := asString(ib["type"])
+	if uuid != "" {
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if typ == "vmess" && strings.HasPrefix(line, "vmess://") {
+				if vmessUUID(line) == uuid {
+					return line
+				}
+			} else if typ != "" && typ != "vmess" && strings.HasPrefix(line, typ+"://") {
+				if u, err := url.Parse(line); err == nil {
+					if u.User != nil && u.User.Username() == uuid {
+						return line
+					}
+				}
+			}
+		}
+	}
+	if asString(ib["type"]) == "vmess" && uuid != "" && port > 0 {
+		return buildVmessURL(sbDir, port, ib)
 	}
 	return ""
 }
