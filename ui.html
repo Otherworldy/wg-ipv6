@@ -1,0 +1,1306 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Route64 - IPv6 出口管理</title>
+<style>
+:root {
+  --bg: #0b0f19;
+  --bg-card: #131927;
+  --bg-card-hover: #182032;
+  --bg-elevated: #1a2236;
+  --bg-input: #0f1422;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-focus: #3b82f6;
+  --text: #f3f4f6;
+  --text-muted: #9ca3af;
+  --text-sub: #6b7280;
+  --primary: #3b82f6;
+  --primary-hover: #2563eb;
+  --success: #10b981;
+  --success-bg: rgba(16, 185, 129, 0.12);
+  --danger: #ef4444;
+  --danger-bg: rgba(239, 68, 68, 0.12);
+  --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.12);
+  --purple: #8b5cf6;
+  --purple-bg: rgba(139, 92, 246, 0.12);
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+/* Header */
+header {
+  background: rgba(19, 25, 39, 0.85);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+
+.brand-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--primary), var(--purple));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+}
+
+.badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+}
+.badge-dot.off {
+  background: var(--danger);
+  box-shadow: 0 0 8px var(--danger);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Buttons */
+button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+button:hover {
+  background: #222b40;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+button.btn-primary {
+  background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+  color: #fff;
+  border-color: transparent;
+  font-weight: 600;
+  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.35);
+}
+button.btn-primary:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.5);
+}
+button.btn-success {
+  background: var(--success-bg);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #6ee7b7;
+}
+button.btn-success:hover {
+  background: rgba(16, 185, 129, 0.25);
+}
+button.btn-danger {
+  background: var(--danger-bg);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+button.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+button.btn-sm {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+/* Layout */
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 28px 0 14px;
+}
+.section-header:first-of-type {
+  margin-top: 4px;
+}
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+.section-desc {
+  font-size: 13px;
+  color: var(--text-sub);
+}
+
+/* Grid & Cards */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.line-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+.line-card:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding-bottom: 10px;
+}
+.card-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tag-default {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #fcd34d;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* Inbound -> Outbound Flow */
+.flow-container {
+  display: grid;
+  grid-template-columns: 1fr 24px 1fr;
+  align-items: center;
+  gap: 8px;
+  background: rgba(15, 20, 34, 0.6);
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+.flow-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+}
+.flow-col .role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-sub);
+  font-weight: 600;
+}
+.flow-col .val-main {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flow-col .val-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flow-arrow {
+  color: var(--primary);
+  text-align: center;
+  font-size: 16px;
+  opacity: 0.8;
+}
+
+/* Card WireGuard stats */
+.wg-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-sub);
+  padding: 0 4px;
+}
+.stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Card Actions */
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 6px;
+}
+.card-actions button {
+  flex: 1;
+  justify-content: center;
+}
+
+/* Compact Table (Direct inbounds) */
+.table-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+th {
+  background: rgba(15, 20, 34, 0.8);
+  color: var(--text-sub);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+td {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  vertical-align: middle;
+}
+tr:last-child td {
+  border-bottom: none;
+}
+tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Dialog / Modal */
+dialog {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+  padding: 0;
+  max-width: 560px;
+  width: 90vw;
+  margin: auto;
+}
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+}
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-sub);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.modal-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+.modal-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 75vh;
+  overflow-y: auto;
+}
+.modal-footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  background: rgba(15, 20, 34, 0.4);
+}
+
+/* Form inputs */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.form-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.form-desc {
+  font-size: 11px;
+  color: var(--text-sub);
+}
+input, select, textarea {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  min-height: 180px;
+  resize: vertical;
+  line-height: 1.4;
+}
+
+/* Link Box in Details Modal */
+.link-box {
+  background: rgba(15, 20, 34, 0.8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.link-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.link-box-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.link-input-row {
+  display: flex;
+  gap: 6px;
+}
+.link-input-row input {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: #93c5fd;
+  background: #090d16;
+}
+
+/* Toast */
+#toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-20px);
+  background: #1e293b;
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 8px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1000;
+}
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+#toast.toast-err {
+  background: #450a0a;
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
+/* Login Modal */
+#loginOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 15, 25, 0.9);
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.login-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  width: min(380px, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: var(--shadow);
+}
+.login-header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.login-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+}
+.login-header p {
+  font-size: 12px;
+  color: var(--text-sub);
+}
+.err-text {
+  font-size: 12px;
+  color: var(--danger);
+  min-height: 16px;
+}
+</style>
+</head>
+<body>
+
+<!-- Toast Notification -->
+<div id="toast"><span>✓</span><span id="toastMsg"></span></div>
+
+<!-- Login View -->
+<div id="loginOverlay">
+  <div class="login-card">
+    <div class="login-header">
+      <div class="brand-icon" style="width:40px;height:40px;font-size:20px;">🌐</div>
+      <h2>Route64 管理控制台</h2>
+      <p>IPv6 动态出口 · 入口配置 · 策略路由</p>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="loginPw">管理口令</label>
+      <input id="loginPw" type="password" placeholder="请输入口令" autocomplete="current-password">
+    </div>
+    <button class="btn-primary" id="loginBtn" style="justify-content:center;padding:10px;">登 录</button>
+    <div id="loginErr" class="err-text" style="text-align:center;"></div>
+  </div>
+</div>
+
+<!-- Main App -->
+<div id="app" style="display:none;">
+  <header>
+    <div class="brand">
+      <div class="brand-icon">🌐</div>
+      <span>Route64 Egress</span>
+    </div>
+    <div class="badges">
+      <div class="badge"><span id="hostBadge">185.93.71.209</span></div>
+      <div class="badge"><span class="badge-dot" id="socksDot"></span><span id="socksBadge">SOCKS5 :13859</span></div>
+      <div class="badge"><span id="tunBadge">5 条出口</span></div>
+    </div>
+    <div class="header-actions">
+      <button class="btn-primary" id="openAddLineBtn">＋ 添加线路</button>
+      <button id="openSocksBtn">⚙️ SOCKS5</button>
+      <button id="logoutBtn">退出</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Section 1: Route64 Pairs -->
+    <div class="section-header">
+      <div>
+        <div class="section-title"><span>🌐</span> Route64 专属链路</div>
+        <div class="section-desc">每个链路对应一个独立的 WireGuard IPv6 出口，提供专属 SOCKS5 与 VLESS</div>
+      </div>
+    </div>
+    <div class="grid" id="lineGrid"></div>
+
+    <!-- Section 2: Direct Inbounds -->
+    <div class="section-header" style="margin-top:40px;">
+      <div>
+        <div class="section-title"><span>🔌</span> 常规协议入口 (Direct 出口)</div>
+        <div class="section-desc">非 Route64 专属入口，走本机 IPv4 出口；支持改端口或改绑到指定 Route64 隧道</div>
+      </div>
+      <button class="btn-sm" id="openAddDirectBtn">＋ 添加常规入口</button>
+    </div>
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:60px;">状态</th>
+            <th>名称 / 协议</th>
+            <th>监听端口</th>
+            <th>出口走向</th>
+            <th style="text-align:right;">操作</th>
+          </tr>
+        </thead>
+        <tbody id="directTableBody"></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<!-- Dialog 1: 添加线路 (Add Route64 Line) -->
+<dialog id="dlgAddLine">
+  <div class="modal-header">
+    <div class="modal-title">添加 Route64 链路</div>
+    <button class="modal-close" onclick="$('dlgAddLine').close()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label class="form-label">线路标识 (唯一名称)</label>
+      <input id="addName" placeholder="例如: route64-hk, router-r3">
+      <div class="form-desc">用于区分接口与 SOCKS 账号，仅支持英文字母、数字、减号</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">同步创建 VLESS 入口端口</label>
+      <input id="addPort" type="number" min="1" max="65535" placeholder="例如: 55281">
+      <div class="form-desc">将克隆现有的 REALITY 配置为此线路创建专属 IPv6 出口通道</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">WireGuard 配置 (整份 wg-quick)</label>
+      <textarea id="addConf" placeholder="[Interface]&#10;Address = 2a11:6c7:xxxx::2/64&#10;PrivateKey = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ...&#10;AllowedIPs = ::/1, 8000::/1"></textarea>
+      <div class="form-desc">必须包含 [Interface] Address, PrivateKey 以及 [Peer]</div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button onclick="$('dlgAddLine').close()">取消</button>
+    <button class="btn-primary" id="submitAddLine">创建并部署</button>
+  </div>
+</dialog>
+
+<!-- Dialog 2: 链接详情 & 导出 (Link Details Modal) -->
+<dialog id="dlgLinkDetails" style="max-width:620px;">
+  <div class="modal-header">
+    <div class="modal-title" id="detailsTitle">链路连接配置</div>
+    <button class="modal-close" onclick="$('dlgLinkDetails').close()">✕</button>
+  </div>
+  <div class="modal-body">
+    <!-- Sticky SOCKS5 -->
+    <div class="link-box">
+      <div class="link-box-header">
+        <div class="link-box-title"><span>⚡</span> 粘性 SOCKS5 链接 (独享固定 IPv6)</div>
+        <button class="btn-sm" id="btnRegenSticky">🔄 刷新会话 ID</button>
+      </div>
+      <div class="form-desc">每次生成不同的会话 ID 会锁定一个固定的 IPv6 地址，适合爬虫/多账号粘性业务。</div>
+      <div class="link-input-row">
+        <input id="inpStickyUrl" readonly>
+        <button class="btn-primary btn-sm" id="btnCopySticky">复制链接</button>
+      </div>
+    </div>
+
+    <!-- Random SOCKS5 -->
+    <div class="link-box">
+      <div class="link-box-header">
+        <div class="link-box-title"><span>🎲</span> 动态随机 SOCKS5 (全 /64 轮换)</div>
+      </div>
+      <div class="form-desc">每次新建 TCP 连接都从整个 /64 地址池动态随机生成全新 IPv6。</div>
+      <div class="link-input-row">
+        <input id="inpRandomUrl" readonly>
+        <button class="btn-sm" id="btnCopyRandom">复制链接</button>
+      </div>
+    </div>
+
+    <!-- VLESS URL -->
+    <div class="link-box" id="vlessBox">
+      <div class="link-box-header">
+        <div class="link-box-title"><span>🚀</span> VLESS REALITY 订阅链接</div>
+      </div>
+      <div class="form-desc">客户端直接导入使用的节点链接，出站直接路由到此 Route64 接口。</div>
+      <div class="link-input-row">
+        <input id="inpVlessUrl" readonly>
+        <button class="btn-sm" id="btnCopyVless">复制链接</button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button onclick="$('dlgLinkDetails').close()">关闭</button>
+  </div>
+</dialog>
+
+<!-- Dialog 3: SOCKS5 全局设置 (SOCKS Settings Modal) -->
+<dialog id="dlgSocks">
+  <div class="modal-header">
+    <div class="modal-title">SOCKS5 服务设置</div>
+    <button class="modal-close" onclick="$('dlgSocks').close()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label class="form-label">监听地址及端口</label>
+      <input id="socksListenInp" placeholder="0.0.0.0:13859">
+      <div class="form-desc">修改监听端口将导致 proxy-sticky 服务重启</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">默认出口隧道</label>
+      <select id="socksDefTunSelect"></select>
+      <div class="form-desc">当 SOCKS 客户端用户名仅为主账号时使用的默认出口</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">当前主账号 (Default Account)</label>
+      <input id="socksAccDisplay" readonly disabled style="opacity:0.7;">
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button onclick="$('dlgSocks').close()">取消</button>
+    <button class="btn-primary" id="saveSocksBtn">保存并重启服务</button>
+  </div>
+</dialog>
+
+<!-- Dialog 4: 替换 WireGuard 配置 (Replace WG Conf Modal) -->
+<dialog id="dlgEditWg">
+  <div class="modal-header">
+    <div class="modal-title" id="editWgTitle">替换 WireGuard 出口配置</div>
+    <button class="modal-close" onclick="$('dlgEditWg').close()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label class="form-label">粘贴新的 wg-quick 配置</label>
+      <textarea id="editWgConf" placeholder="[Interface]&#10;Address = ...&#10;PrivateKey = ...&#10;&#10;[Peer]&#10;..."></textarea>
+      <div class="form-desc">保存后将更新 WireGuard 配置文件并重启网络服务</div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button onclick="$('dlgEditWg').close()">取消</button>
+    <button class="btn-primary" id="saveWgBtn">保存并应用</button>
+  </div>
+</dialog>
+
+<!-- Dialog 5: 编辑入口 (Edit Inbound Modal) -->
+<dialog id="dlgEditInbound">
+  <div class="modal-header">
+    <div class="modal-title" id="editInboundTitle">修改入口配置</div>
+    <button class="modal-close" onclick="$('dlgEditInbound').close()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label class="form-label">监听端口</label>
+      <input id="editInboundPort" type="number" min="1" max="65535">
+    </div>
+    <div class="form-group">
+      <label class="form-label">绑定出口</label>
+      <select id="editInboundTun">
+        <option value="">direct (走本机 IPv4 出口)</option>
+      </select>
+      <div class="form-desc">可随时将常规协议入口接入 Route64 专属 IPv6 隧道</div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button onclick="$('dlgEditInbound').close()">取消</button>
+    <button class="btn-primary" id="saveInboundBtn">保存修改</button>
+  </div>
+</dialog>
+
+<!-- Dialog 6: 添加常规入口 (Add Direct Inbound Modal) -->
+<dialog id="dlgAddDirect">
+  <div class="modal-header">
+    <div class="modal-title">添加常规协议入口</div>
+    <button class="modal-close" onclick="$('dlgAddDirect').close()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label class="form-label">克隆源协议</label>
+      <select id="directCloneFrom"></select>
+      <div class="form-desc">将以此入口的 TLS/Reality/传输协议模板生成新配置</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">新入口名称 (Tag)</label>
+      <input id="directAddTag" placeholder="例如: vless-new, hy2-custom">
+    </div>
+    <div class="form-group">
+      <label class="form-label">监听端口</label>
+      <input id="directAddPort" type="number" min="1" max="65535" placeholder="例如: 55290">
+    </div>
+    <div class="form-group">
+      <label class="form-label">出口走向</label>
+      <select id="directAddTun">
+        <option value="">direct (走本机 IPv4 出口)</option>
+      </select>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button onclick="$('dlgAddDirect').close()">取消</button>
+    <button class="btn-primary" id="submitAddDirect">确认创建</button>
+  </div>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+let state = { tunnels: [], inbounds: [], status: {} };
+let currentDetailsTun = null;
+
+// Helpers
+function toast(msg, isErr = false) {
+  const el = $('toast');
+  $('toastMsg').textContent = msg;
+  el.className = isErr ? 'toast-err show' : 'show';
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.className = '', 2500);
+}
+
+function randId(len = 6) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let res = '';
+  for (let i = 0; i < len; i++) res += chars.charAt(Math.floor(Math.random() * chars.length));
+  return res;
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function copyText(text, label = '链接') {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`已复制 ${label} 到剪贴板`);
+  } catch (e) {
+    const inp = document.createElement('input');
+    inp.value = text;
+    document.body.appendChild(inp);
+    inp.select();
+    document.execCommand('copy');
+    document.body.removeChild(inp);
+    toast(`已复制 ${label} 到剪贴板`);
+  }
+}
+
+// API
+async function api(method, path, body) {
+  const opt = { method, credentials: 'same-origin', headers: {} };
+  if (body !== undefined) {
+    opt.headers['Content-Type'] = 'application/json';
+    opt.body = JSON.stringify(body);
+  }
+  const r = await fetch(path, opt);
+  const t = await r.text();
+  let j = null;
+  try { j = JSON.parse(t); } catch {}
+  if (r.status === 401) {
+    showLogin();
+    throw new Error('未登录');
+  }
+  if (!r.ok) throw new Error((j && j.error) || t || ('HTTP ' + r.status));
+  return j;
+}
+
+function showLogin() {
+  $('loginOverlay').style.display = 'flex';
+  $('app').style.display = 'none';
+}
+function showApp() {
+  $('loginOverlay').style.display = 'none';
+  $('app').style.display = 'block';
+}
+
+async function waitUp() {
+  toast('服务重启中，正在重新建立连接…');
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 600));
+    try {
+      await api('GET', '/api/status');
+      await load();
+      toast('服务已重启成功');
+      return;
+    } catch (e) {
+      if (e.message === '未登录') return;
+    }
+  }
+  toast('重启响应超时，请刷新页面', true);
+}
+
+// SOCKS Link Generator
+function makeSocksUrls(tunName, stickyId = null) {
+  const socks = (state.status && state.status.socks) || {};
+  const host = state.status.host || window.location.hostname;
+  const port = socks.port || (socks.listen ? socks.listen.split(':').pop() : '13859');
+  const acc = socks.default_account || '';
+  const pw = socks.password || '';
+  const sid = stickyId || randId();
+
+  // socks5://account.tunnel.stickyId:pass@host:port
+  const stickyUrl = `socks5://${acc}.${tunName}.${sid}:${pw}@${host}:${port}`;
+  const randomUrl = `socks5://${acc}.${tunName}:${pw}@${host}:${port}`;
+  return { stickyUrl, randomUrl, sid };
+}
+
+// Render Main Dashboard
+async function load() {
+  const [st, tun, ib] = await Promise.all([
+    api('GET', '/api/status'),
+    api('GET', '/api/tunnels'),
+    api('GET', '/api/inbounds')
+  ]);
+  state = { status: st, tunnels: tun.tunnels || [], inbounds: ib.inbounds || [] };
+
+  // Header badges
+  $('hostBadge').textContent = st.host || window.location.hostname;
+  const socksPort = (st.socks && st.socks.port) || (st.socks && st.socks.listen ? st.socks.listen.split(':').pop() : '13859');
+  $('socksBadge').textContent = `SOCKS5 :${socksPort}`;
+  $('tunBadge').textContent = `${state.tunnels.length} 条出口`;
+
+  renderLines();
+  renderDirect();
+}
+
+function renderLines() {
+  const grid = $('lineGrid');
+  if (!state.tunnels.length) {
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-sub);">暂无 Route64 链路，请点击右上角添加</div>';
+    return;
+  }
+
+  const html = state.tunnels.map(tun => {
+    // Find matching inbound
+    const ib = state.inbounds.find(x => x.tunnel === tun.name);
+    const isDefault = tun.default;
+    const isUp = tun.up;
+
+    const inCol = ib ? `
+      <div class="flow-col">
+        <div class="role">入口 (${esc(ib.type).toUpperCase()})</div>
+        <div class="val-main">${esc(ib.tag)}</div>
+        <div class="val-sub">:${ib.listen_port} ${ib.enabled ? '· 正常' : '· 停用'}</div>
+      </div>
+    ` : `
+      <div class="flow-col">
+        <div class="role">入口</div>
+        <div class="val-main" style="color:var(--text-sub);">未绑定</div>
+        <div class="val-sub"><button class="btn-sm" style="padding:1px 6px;font-size:11px;" onclick="quickMakeInbound('${esc(tun.name)}')">+ 补建</button></div>
+      </div>
+    `;
+
+    const outCol = `
+      <div class="flow-col">
+        <div class="role">出口 (Route64)</div>
+        <div class="val-main">${esc(tun.name)}</div>
+        <div class="val-sub">${esc(tun.prefix || '::/64')}</div>
+      </div>
+    `;
+
+    return `
+      <div class="line-card" data-tun="${esc(tun.name)}" data-tag="${esc(ib ? ib.tag : '')}">
+        <div class="card-top">
+          <div class="card-name">
+            <span class="badge-dot ${isUp ? '' : 'off'}"></span>
+            <span>${esc(tun.name)}</span>
+            ${isDefault ? '<span class="tag-default">SOCKS 默认</span>' : ''}
+          </div>
+          <div style="display:flex;gap:4px;">
+            <button class="btn-sm" onclick="openEditWg('${esc(tun.name)}')">换配置</button>
+            ${isDefault ? '' : `<button class="btn-sm btn-danger" onclick="confirmDelLine('${esc(tun.name)}')">删除</button>`}
+          </div>
+        </div>
+
+        <div class="flow-container">
+          ${inCol}
+          <div class="flow-arrow">➔</div>
+          ${outCol}
+        </div>
+
+        <div class="wg-stats">
+          <span class="stat-pill">握手: ${esc(tun.handshake || '未就绪')}</span>
+          <span class="stat-pill">${esc(tun.transfer || '0 B')}</span>
+        </div>
+
+        <div class="card-actions">
+          <button class="btn-success" onclick="quickCopySocks('${esc(tun.name)}')">
+            <span>⚡</span> 复制 SOCKS5
+          </button>
+          <button onclick="openDetails('${esc(tun.name)}')">
+            <span>📋</span> 链接详情
+          </button>
+          ${ib ? `<button onclick="openEditInbound('${esc(ib.tag)}')"><span>⚙️</span> 改入口</button>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  grid.innerHTML = html;
+}
+
+function renderDirect() {
+  const tbody = $('directTableBody');
+  const directs = state.inbounds.filter(x => !x.tunnel);
+
+  if (!directs.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-sub);padding:24px;">暂无常规入口</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = directs.map(ib => `
+    <tr>
+      <td>${ib.enabled ? '<span class="badge-dot"></span>' : '<span class="badge-dot off"></span>'}</td>
+      <td>
+        <div style="font-weight:600;">${esc(ib.tag)}</div>
+        <div style="font-size:11px;color:var(--text-sub);">${esc(ib.type)} ${ib.reality ? '· REALITY' : ''}</div>
+      </td>
+      <td style="font-family:ui-monospace,monospace;color:#93c5fd;">:${ib.listen_port}</td>
+      <td style="color:var(--text-muted);">direct (本机 IPv4)</td>
+      <td style="text-align:right;">
+        <div style="display:inline-flex;gap:6px;">
+          ${ib.url ? `<button class="btn-sm" onclick="copyText('${esc(ib.url)}', '订阅')">复制订阅</button>` : ''}
+          <button class="btn-sm" onclick="openEditInbound('${esc(ib.tag)}')">改端口/出口</button>
+          <button class="btn-sm btn-danger" onclick="confirmDelInbound('${esc(ib.tag)}')">删除</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+// Quick Actions
+window.quickCopySocks = function(tunName) {
+  const { stickyUrl, sid } = makeSocksUrls(tunName);
+  copyText(stickyUrl, `SOCKS5 (会话 ${sid})`);
+};
+
+window.openDetails = function(tunName) {
+  currentDetailsTun = tunName;
+  const tun = state.tunnels.find(t => t.name === tunName);
+  const ib = state.inbounds.find(x => x.tunnel === tunName);
+
+  $('detailsTitle').textContent = `链路连接配置 - ${tunName}`;
+  const { stickyUrl, randomUrl, sid } = makeSocksUrls(tunName);
+  $('inpStickyUrl').value = stickyUrl;
+  $('inpRandomUrl').value = randomUrl;
+
+  // VLESS
+  if (ib && ib.url) {
+    $('vlessBox').style.display = 'flex';
+    $('inpVlessUrl').value = ib.url;
+  } else {
+    $('vlessBox').style.display = 'none';
+  }
+
+  $('btnRegenSticky').onclick = () => {
+    const res = makeSocksUrls(currentDetailsTun);
+    $('inpStickyUrl').value = res.stickyUrl;
+    toast(`已刷新会话 ID: ${res.sid}`);
+  };
+  $('btnCopySticky').onclick = () => copyText($('inpStickyUrl').value, '粘性 SOCKS5 链接');
+  $('btnCopyRandom').onclick = () => copyText($('inpRandomUrl').value, '动态随机 SOCKS5 链接');
+  $('btnCopyVless').onclick = () => copyText($('inpVlessUrl').value, 'VLESS 订阅链接');
+
+  $('dlgLinkDetails').showModal();
+};
+
+window.quickMakeInbound = async function(tunName) {
+  const portStr = prompt(`为 ${tunName} 输入新建的 VLESS 监听端口:`, '55280');
+  if (!portStr) return;
+  const port = parseInt(portStr, 10);
+  if (!port || port <= 0 || port > 65535) {
+    toast('端口不合法', true);
+    return;
+  }
+  const clone = (state.inbounds.find(x => x.tunnel) || state.inbounds.find(x => x.type === 'vless') || {}).tag;
+  try {
+    await api('POST', '/api/inbounds', {
+      clone_from: clone,
+      tag: 'vless-' + tunName,
+      listen_port: port,
+      tunnel: tunName
+    });
+    toast(`已为 ${tunName} 创建入口 :${port}`);
+    await load();
+  } catch (e) {
+    toast(e.message, true);
+  }
+};
+
+window.openEditInbound = function(tag) {
+  const ib = state.inbounds.find(x => x.tag === tag);
+  if (!ib) return;
+  $('editInboundTitle').textContent = `修改入口配置 - ${tag}`;
+  $('editInboundPort').value = ib.listen_port;
+
+  // Options
+  const tunOpts = state.tunnels.map(t => `<option value="${esc(t.name)}" ${ib.tunnel === t.name ? 'selected' : ''}>Route64 出口: ${esc(t.name)}</option>`).join('');
+  $('editInboundTun').innerHTML = '<option value="">direct (走本机 IPv4 出口)</option>' + tunOpts;
+
+  $('saveInboundBtn').onclick = async () => {
+    const port = parseInt($('editInboundPort').value, 10);
+    const tunVal = $('editInboundTun').value;
+    try {
+      await api('PUT', '/api/inbounds/' + encodeURIComponent(tag), {
+        listen_port: port,
+        tunnel: tunVal
+      });
+      $('dlgEditInbound').close();
+      toast('入口已更新');
+      await load();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+
+  $('dlgEditInbound').showModal();
+};
+
+window.openEditWg = function(tunName) {
+  $('editWgTitle').textContent = `替换出口 WireGuard 配置 - ${tunName}`;
+  $('editWgConf').value = '';
+  $('saveWgBtn').onclick = async () => {
+    const conf = $('editWgConf').value.trim();
+    if (!conf) {
+      toast('请粘贴配置', true);
+      return;
+    }
+    try {
+      const r = await api('PUT', '/api/tunnels/' + encodeURIComponent(tunName), { conf });
+      $('dlgEditWg').close();
+      if (r.restarting) await waitUp(); else await load();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+  $('dlgEditWg').showModal();
+};
+
+window.confirmDelLine = async function(tunName) {
+  if (!confirm(`确定要彻底删除链路 "${tunName}" 吗？\n绑定它的入口将会停用，WireGuard 接口与策略路由将被移除。`)) return;
+  try {
+    const r = await api('DELETE', '/api/tunnels/' + encodeURIComponent(tunName));
+    if (r.restarting) await waitUp(); else await load();
+    toast(`已删除链路 ${tunName}`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+};
+
+window.confirmDelInbound = async function(tag) {
+  if (!confirm(`确定要删除入口 "${tag}" 吗？`)) return;
+  try {
+    await api('DELETE', '/api/inbounds/' + encodeURIComponent(tag));
+    toast(`已删除入口 ${tag}`);
+    await load();
+  } catch (e) {
+    toast(e.message, true);
+  }
+};
+
+// Add Line Modal
+$('openAddLineBtn').onclick = () => {
+  $('addName').value = '';
+  $('addPort').value = '';
+  $('addConf').value = '';
+  $('dlgAddLine').showModal();
+};
+
+$('submitAddLine').onclick = async () => {
+  const name = $('addName').value.trim();
+  const port = parseInt($('addPort').value, 10);
+  const conf = $('addConf').value.trim();
+  if (!name) { toast('请输入线路标识', true); return; }
+  if (!port) { toast('请输入入口端口', true); return; }
+  if (!conf) { toast('请粘贴 WireGuard 配置', true); return; }
+
+  try {
+    const r = await api('POST', '/api/tunnels', {
+      name,
+      conf,
+      inbound_port: port
+    });
+    $('dlgAddLine').close();
+    if (r.inbound_error) {
+      toast(`出口已添加，但入口创建失败: ${r.inbound_error}`, true);
+    } else {
+      toast(`线路 ${name} 创建成功`);
+    }
+    if (r.restarting) await waitUp(); else await load();
+  } catch (e) {
+    toast(e.message, true);
+  }
+};
+
+// Add Direct Inbound Modal
+$('openAddDirectBtn').onclick = () => {
+  const inbs = state.inbounds.filter(x => x.enabled);
+  $('directCloneFrom').innerHTML = inbs.map(x => `<option value="${esc(x.tag)}">${esc(x.tag)} (${x.type}:${x.listen_port})</option>`).join('');
+  $('directAddTag').value = '';
+  $('directAddPort').value = '';
+  const tunOpts = state.tunnels.map(t => `<option value="${esc(t.name)}">Route64 出口: ${esc(t.name)}</option>`).join('');
+  $('directAddTun').innerHTML = '<option value="">direct (走本机 IPv4 出口)</option>' + tunOpts;
+  $('dlgAddDirect').showModal();
+};
+
+$('submitAddDirect').onclick = async () => {
+  const clone = $('directCloneFrom').value;
+  const tag = $('directAddTag').value.trim();
+  const port = parseInt($('directAddPort').value, 10);
+  const tun = $('directAddTun').value;
+  if (!tag) { toast('请输入名称', true); return; }
+  if (!port) { toast('请输入端口', true); return; }
+  try {
+    await api('POST', '/api/inbounds', {
+      clone_from: clone,
+      tag,
+      listen_port: port,
+      tunnel: tun
+    });
+    $('dlgAddDirect').close();
+    toast(`已添加入口 ${tag}`);
+    await load();
+  } catch (e) {
+    toast(e.message, true);
+  }
+};
+
+// SOCKS Settings Modal
+$('openSocksBtn').onclick = () => {
+  const socks = (state.status && state.status.socks) || {};
+  $('socksListenInp').value = socks.listen || '';
+  $('socksAccDisplay').value = socks.default_account || '';
+  $('socksDefTunSelect').innerHTML = state.tunnels.map(t => `
+    <option value="${esc(t.name)}" ${t.name === socks.default_tunnel ? 'selected' : ''}>
+      ${esc(t.name)} (${esc(t.prefix || '::/64')})
+    </option>
+  `).join('');
+  $('dlgSocks').showModal();
+};
+
+$('saveSocksBtn').onclick = async () => {
+  const listen = $('socksListenInp').value.trim();
+  const defTun = $('socksDefTunSelect').value;
+  try {
+    const r = await api('PUT', '/api/socks', {
+      listen,
+      default_tunnel: defTun
+    });
+    $('dlgSocks').close();
+    if (r.restarting) await waitUp(); else await load();
+  } catch (e) {
+    toast(e.message, true);
+  }
+};
+
+// Auth
+$('loginBtn').onclick = async () => {
+  $('loginErr').textContent = '';
+  const pw = $('loginPw').value;
+  try {
+    await api('POST', '/api/login', { password: pw });
+    $('loginPw').value = '';
+    showApp();
+    await load();
+  } catch (e) {
+    $('loginErr').textContent = e.message;
+  }
+};
+$('loginPw').onkeydown = e => { if (e.key === 'Enter') $('loginBtn').click(); };
+
+$('logoutBtn').onclick = async () => {
+  try { await api('POST', '/api/logout'); } catch {}
+  showLogin();
+};
+
+// Auto Init
+(async () => {
+  try {
+    await api('GET', '/api/status');
+    showApp();
+    await load();
+  } catch {
+    showLogin();
+  }
+})();
+</script>
+</body>
+</html>

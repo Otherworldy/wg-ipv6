@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -202,6 +203,18 @@ func (t *Tunnel) EnsureUp(projectDir string, manage bool) error {
 	return nil
 }
 
+// ip6RuleAddArgs 拆开 iproute2 参数。pref/fwmark/lookup 必须各自成 argv，
+// 合成 "pref 10064" 会被 ip 当成一个参数直接 255。
+func ip6RuleAddArgs(pref, mark, table int) []string {
+	return []string{
+		"-6", "rule", "add",
+		"pref", strconv.Itoa(pref),
+		"from", "all",
+		"fwmark", fmt.Sprintf("%#x/0xff", mark),
+		"lookup", strconv.Itoa(table),
+	}
+}
+
 // EnsureRule：策略路由规则幂等（fwmark 低 8 位 + 对应路由表）。
 // iproute2 按 argv 解析，pref/fwmark/lookup 必须拆开，不能写成 "pref 10064" 一个参数。
 func (t *Tunnel) EnsureRule() error {
@@ -210,15 +223,19 @@ func (t *Tunnel) EnsureRule() error {
 	if bytes.Contains(out, []byte(needle)) {
 		return nil
 	}
-	out, err := exec.Command("ip", "-6", "rule", "add",
-		"pref", fmt.Sprintf("%d", t.rulePref()),
-		"from", "all",
-		"fwmark", fmt.Sprintf("%#x/0xff", t.Conf.Mark),
-		"lookup", fmt.Sprintf("%d", t.Conf.Table)).CombinedOutput()
+	args := ip6RuleAddArgs(t.rulePref(), t.Conf.Mark, t.Conf.Table)
+	out, err := exec.Command("ip", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(out))
 	}
 	return nil
+}
+
+// Down 停接口、删 nft 表和 fwmark 规则。删隧道时在写配置/重启前调用。
+func (t *Tunnel) Down() {
+	exec.Command("wg-quick", "down", t.Conf.Name).Run()
+	exec.Command("nft", "delete", "table", "ip6", t.nftName()).Run()
+	exec.Command("ip", "-6", "rule", "del", "pref", strconv.Itoa(t.rulePref())).Run()
 }
 
 // EnsureAddr：幂等在接口上添加 /128（粘性账号出口地址）。

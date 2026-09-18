@@ -29,7 +29,11 @@ type (
 		Ephemeral      bool              `yaml:"ephemeral"`        // 默认账号全 /64 随机 IID
 		EphemeralGrace time.Duration     `yaml:"ephemeral_grace"`  // 临时地址延迟删除时长
 		LogLevel       string            `yaml:"log_level"`
+		AdminListen    string            `yaml:"admin_listen"`
+		AdminPassword  string            `yaml:"admin_password"`
+		SingBoxDir     string            `yaml:"singbox_dir"`
 		BaseDir        string            `yaml:"-"`
+		Path           string            `yaml:"-"`
 	}
 
 	TunnelConf struct {
@@ -53,10 +57,12 @@ func LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	base, err := filepath.Abs(filepath.Dir(path))
+	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
+	c.Path = abs
+	base := filepath.Dir(abs)
 	c.BaseDir = base
 	if c.StateFile != "" && !filepath.IsAbs(c.StateFile) {
 		c.StateFile = filepath.Join(base, c.StateFile)
@@ -79,6 +85,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.EphemeralGrace <= 0 {
 		c.EphemeralGrace = 60 * time.Second
+	}
+	if c.SingBoxDir == "" {
+		c.SingBoxDir = "/etc/sing-box/conf"
 	}
 	for i := range c.Tunnels {
 		t := &c.Tunnels[i]

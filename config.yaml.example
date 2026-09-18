@@ -42,3 +42,8 @@ connect_timeout: 15s
 idle_timeout: 10m                # 0 = 不设空闲超时
 max_conns: 4096
 log_level: "info"
+
+# 管理页面（空 = 不监听）。公网绑定必须设强口令；HTTP 明文。
+# admin_listen: "0.0.0.0:7676"
+# admin_password: "CHANGE_ME_ADMIN"
+# singbox_dir: "/etc/sing-box/conf"

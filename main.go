@@ -154,6 +154,17 @@ func main() {
 		go reapLoop(logger, srv, store, tunnels, protected, cfg.AccountIdleTTL)
 	}
 
+	if cfg.AdminListen != "" {
+		if err := ensureAdminPassword(cfg); err != nil {
+			logger.Fatalf("admin password: %v", err)
+		}
+		go func() {
+			if err := serveAdmin(cfg, logger); err != nil {
+				logger.Printf("admin: %v", err)
+			}
+		}()
+	}
+
 	l, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		logger.Fatalf("listen %s: %v (sing-box 占用 26183 时请改 listen 或停用其 socks5-in)", cfg.Listen, err)
