@@ -960,11 +960,122 @@ func buildVmessURL(sbDir string, port int, ib map[string]any) string {
 	return "vmess://" + base64.StdEncoding.EncodeToString(b)
 }
 
+// linkMatchesInbound 判断 url.txt 里的模板行是否真的描述这个入口：
+// 传输层（ws/grpc/http）和 TLS 形态（reality/tls/none）对不上时，模板就是错的
+// （比如 ws 入口借用了别的入口的 reality 链接），照着它发出去的节点一律连不上。
+func linkMatchesInbound(line string, ib map[string]any) bool {
+	u, err := url.Parse(strings.TrimSpace(line))
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	q := u.Query()
+	wantNet := "tcp"
+	if tr, ok := ib["transport"].(map[string]any); ok {
+		if t := asString(tr["type"]); t != "" {
+			wantNet = t
+		}
+	}
+	gotNet := q.Get("type")
+	if gotNet == "" {
+		gotNet = "tcp"
+	}
+	if gotNet != wantNet {
+		return false
+	}
+	wantSec := "none"
+	if tls, ok := ib["tls"].(map[string]any); ok {
+		if en, _ := tls["enabled"].(bool); en {
+			wantSec = "tls"
+			if r, ok := tls["reality"].(map[string]any); ok {
+				if en, _ := r["enabled"].(bool); en {
+					wantSec = "reality"
+				}
+			}
+		}
+	}
+	gotSec := q.Get("security")
+	if gotSec == "" {
+		gotSec = "none"
+	}
+	return gotSec == wantSec
+}
+
+// buildVlessURL 用入口自身配置拼 vless 链接（模板缺失或与入口不一致时兜底）。
+func buildVlessURL(sbDir string, port int, ib map[string]any, uuid, name string) string {
+	host := publicHost(sbDir)
+	if host == "" || uuid == "" || port <= 0 {
+		return ""
+	}
+	flow := ""
+	if users, ok := ib["users"].([]any); ok {
+		for _, u := range users {
+			if m, ok := u.(map[string]any); ok {
+				if f := asString(m["flow"]); f != "" {
+					flow = f
+					break
+				}
+			}
+		}
+	}
+	q := url.Values{}
+	q.Set("encryption", "none")
+	if flow != "" {
+		q.Set("flow", flow)
+	}
+	if tr, ok := ib["transport"].(map[string]any); ok {
+		if t := asString(tr["type"]); t != "" && t != "tcp" {
+			q.Set("type", t)
+		}
+		if p := asString(tr["path"]); p != "" {
+			q.Set("path", p)
+		}
+		if h := asString(tr["host"]); h != "" {
+			q.Set("host", h)
+		}
+		if sn := asString(tr["service_name"]); sn != "" {
+			q.Set("serviceName", sn)
+		}
+	}
+	sec := "none"
+	if tls, ok := ib["tls"].(map[string]any); ok {
+		if en, _ := tls["enabled"].(bool); en {
+			sec = "tls"
+			if r, ok := tls["reality"].(map[string]any); ok {
+				if en, _ := r["enabled"].(bool); en {
+					sec = "reality"
+					q.Set("pbk", asString(r["public_key"]))
+					if sid := asString(r["short_id"]); sid != "" {
+						q.Set("sid", sid)
+					}
+				}
+			}
+			if sni := asString(tls["server_name"]); sni != "" {
+				q.Set("sni", sni)
+			}
+			if ut, ok := tls["utls"].(map[string]any); ok {
+				if fp := asString(ut["fingerprint"]); fp != "" {
+					q.Set("fp", fp)
+				}
+			}
+		}
+	}
+	q.Set("security", sec)
+	if name == "" {
+		name = asString(ib["tag"])
+	}
+	return "vless://" + uuid + "@" + host + ":" + strconv.Itoa(port) + "?" + q.Encode() + "#" + name
+}
+
 func shareURLOf(sbDir string, port int, ib map[string]any) string {
+	// 只有 vless/vmess 能凭入口配置自己拼出链接，其它类型没有更好的来源，模板照用
+	synth := asString(ib["type"]) == "vless" || asString(ib["type"]) == "vmess"
 	lines := loadURLLines(sbDir)
 	for _, line := range lines {
 		if sharePort(line) == port && port > 0 {
-			return line
+			if !synth || linkMatchesInbound(line, ib) {
+				return line
+			}
+			break // 端口命中了但传输/TLS 对不上，会误导，改用入口自身配置拼
 		}
 	}
 	uuid, _ := inboundCreds(ib)
@@ -978,15 +1089,20 @@ func shareURLOf(sbDir string, port int, ib map[string]any) string {
 				}
 			} else if typ != "" && typ != "vmess" && strings.HasPrefix(line, typ+"://") {
 				if u, err := url.Parse(line); err == nil {
-					if u.User != nil && u.User.Username() == uuid {
+					if u.User != nil && u.User.Username() == uuid && (!synth || linkMatchesInbound(line, ib)) {
 						return line
 					}
 				}
 			}
 		}
 	}
-	if asString(ib["type"]) == "vmess" && uuid != "" && port > 0 {
-		return buildVmessURL(sbDir, port, ib)
+	switch asString(ib["type"]) {
+	case "vmess":
+		if uuid != "" && port > 0 {
+			return buildVmessURL(sbDir, port, ib)
+		}
+	case "vless":
+		return buildVlessURL(sbDir, port, ib, uuid, "")
 	}
 	return ""
 }

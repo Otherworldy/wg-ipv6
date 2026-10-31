@@ -597,3 +597,38 @@ Endpoint = 127.0.0.1:1
 		t.Fatal("别的隧道的账号被误删")
 	}
 }
+
+// ws 入口的链接不能借用别的入口的 reality 模板（会生成连不上的节点）
+func TestShareURLRebuildsMismatchedTemplate(t *testing.T) {
+	cfg := testCfg()
+	newSBDir(t, cfg)
+	stubRestart(t)
+	writeSBFile(t, cfg, "inbounds.json", map[string]any{"inbounds": []any{
+		map[string]any{"tag": "vless-ws", "type": "vless", "listen_port": 8002,
+			"transport": map[string]any{"type": "ws", "path": "/vless-cdn"},
+			"users":     []any{map[string]any{"uuid": "aaaaaaaa-1111-2222-3333-444444444444"}}},
+	}})
+	writeSBFile(t, cfg, "outbounds.json", map[string]any{"outbounds": []any{
+		map[string]any{"tag": "direct", "type": "direct"},
+	}})
+	writeSBFile(t, cfg, "route.json", map[string]any{"route": map[string]any{"final": "direct"}})
+	// url.txt 里 8002 那一行是别处的 reality 链接（历史遗留的错模板）
+	if err := os.WriteFile(urlTxtPath(cfg.SingBoxDir),
+		[]byte("vless://aaaaaaaa-1111-2222-3333-444444444444@203.0.113.9:8002?security=reality&pbk=x&type=tcp#old"+string(rune(10))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inb, _, _, _ := loadSB(cfg.SingBoxDir)
+	_, ib := findInbound(inb.Inbounds, "vless-ws")
+	got := shareURLOf(cfg.SingBoxDir, 8002, ib)
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("bad url %q: %v", got, err)
+	}
+	q := u.Query()
+	if q.Get("type") != "ws" || q.Get("path") != "/vless-cdn" || q.Get("security") != "none" {
+		t.Fatalf("link not rebuilt from inbound: %s", got)
+	}
+	if q.Get("pbk") != "" {
+		t.Fatalf("reality 参数残留: %s", got)
+	}
+}
