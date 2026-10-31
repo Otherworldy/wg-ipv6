@@ -100,7 +100,8 @@ func main() {
 	if !*skipSystem {
 		for username, addrStr := range cfg.SeedAccounts {
 			if err := seedAccount(store, tunnels, username, addrStr); err != nil {
-				logger.Fatalf("seed %s: %v", username, err)
+				// 一条过期的 seed 不该拖垮整个服务（删隧道后很容易留下这种配置）
+				logger.Printf("skip seed %s: %v", username, err)
 			}
 		}
 	}
@@ -174,7 +175,6 @@ func main() {
 		logger.Fatalf("listen %s: %v (sing-box 占用 26183 时请改 listen 或停用其 socks5-in)", cfg.Listen, err)
 	}
 	logger.Printf("listening %s, default_account=%s, tunnels=%d", cfg.Listen, cfg.DefaultAccount, len(tunnels))
-
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

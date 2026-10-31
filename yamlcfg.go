@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 
@@ -125,6 +126,26 @@ func yamlRemoveTunnel(m *yaml.Node, name string) error {
 	}
 	seq.Content = kept
 	return nil
+}
+
+// yamlPruneSeedAccounts 删掉 seed_accounts 里落在 prefix 内的条目（隧道被删后的残留）。
+func yamlPruneSeedAccounts(m *yaml.Node, prefix netip.Prefix) int {
+	n := yamlMapGet(m, "seed_accounts")
+	if n == nil || n.Kind != yaml.MappingNode {
+		return 0
+	}
+	kept := n.Content[:0]
+	removed := 0
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		addr, err := netip.ParseAddr(n.Content[i+1].Value)
+		if err == nil && prefix.Contains(addr) {
+			removed++
+			continue
+		}
+		kept = append(kept, n.Content[i], n.Content[i+1])
+	}
+	n.Content = kept
+	return removed
 }
 
 func nextTableMark(ts []TunnelConf) (int, int) {

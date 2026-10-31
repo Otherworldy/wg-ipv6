@@ -65,6 +65,24 @@ func (s *Store) Get(username string) (AccountRecord, bool) {
 	return r, ok
 }
 
+// DropTunnel 删除属于该隧道的账号记录（隧道被删后这些地址已无意义），返回被删记录。
+func (s *Store) DropTunnel(tunnel string) []AccountRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var removed []AccountRecord
+	for u, r := range s.records {
+		if r.Tunnel == tunnel {
+			removed = append(removed, r)
+			delete(s.records, u)
+		}
+	}
+	if len(removed) > 0 {
+		delete(s.next, tunnel)
+		_ = s.saveLocked()
+	}
+	return removed
+}
+
 // Seed 幂等写入预置账号（如兼容旧 acc1/acc2）。seed 地址不影响 sticky 分配序列。
 // 若 seed 落在 sticky 区间则推进 next 避免重复分配。
 func (s *Store) Seed(t *Tunnel, username string, addr netip.Addr) error {

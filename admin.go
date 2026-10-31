@@ -486,6 +486,11 @@ func (a *admin) delTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := &Tunnel{Conf: *tc}
+	// 删之前先从 wg conf 取子网，用来清理 seed_accounts 与 state 里的残留账号
+	var prefix netip.Prefix
+	if b, rerr := os.ReadFile(tc.WGConf); rerr == nil {
+		prefix, _ = firstV6Address(string(b))
+	}
 	t.Down()
 	doc, err := loadYAMLDoc(a.cfg.Path)
 	if err != nil {
@@ -496,9 +501,16 @@ func (a *admin) delTunnel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	if prefix.IsValid() {
+		yamlPruneSeedAccounts(rootMap(doc), prefix)
+	}
 	if err := writeYAMLDoc(a.cfg.Path, doc); err != nil {
 		writeErr(w, 500, err.Error())
 		return
+	}
+	// state 里属于这条隧道的账号跟着删，否则下次分配/统计还会出现幽灵地址
+	if store, serr := LoadStore(a.cfg.StateFile); serr == nil {
+		store.DropTunnel(name)
 	}
 	bak := filepath.Join(a.cfg.BaseDir, "backups", name+"."+time.Now().Format("20060102-150405")+".conf")
 	_ = os.MkdirAll(filepath.Dir(bak), 0o755)

@@ -501,3 +501,99 @@ func TestAddSocksInbound(t *testing.T) {
 		}
 	}
 }
+
+// 删隧道要清掉 seed_accounts 与 state 里的残留，且残留 seed 不能让启动失败
+func TestDropTunnelCleansResidue(t *testing.T) {
+	cfg := testCfg()
+	newSBDir(t, cfg)
+	stubRestart(t)
+	cfg.Path = filepath.Join(cfg.BaseDir, "config.yaml")
+	cfg.StateFile = filepath.Join(cfg.BaseDir, "state", "accounts.json")
+	if err := os.MkdirAll(filepath.Dir(cfg.StateFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	doc := `listen: "0.0.0.0:26184"
+password: "pw"
+default_account: "43b3277e"
+default_tunnel: "route64"
+seed_accounts:
+  "43b3277e.acc1": "2a11:6c7:f07:656::2011"
+  "43b3277e.keep": "2a11:6c7:f07:6cd::2011"
+tunnels:
+  - name: route64
+    wg_conf: wg/route64.conf
+    table: 64
+    mark: 0x40
+  - name: route64-n1
+    wg_conf: wg/route64-n1.conf
+    table: 67
+    mark: 0x43
+`
+	if err := os.WriteFile(cfg.Path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeSBFile(t, cfg, "inbounds.json", map[string]any{"inbounds": []any{}})
+	writeSBFile(t, cfg, "outbounds.json", map[string]any{"outbounds": []any{
+		map[string]any{"tag": "direct", "type": "direct"},
+	}})
+	writeSBFile(t, cfg, "route.json", map[string]any{"route": map[string]any{"final": "direct"}})
+
+	// wg conf：route64 用 656::/64
+	old := `[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Address = 2a11:6c7:f07:656::2/64
+
+[Peer]
+PublicKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+AllowedIPs = ::/1, 8000::/1
+Endpoint = 127.0.0.1:1
+`
+	cfg.Tunnels = []TunnelConf{
+		{Name: "route64", WGConf: filepath.Join(cfg.BaseDir, "wg", "route64.conf"), Table: 64, Mark: 0x40},
+		{Name: "route64-n1", WGConf: filepath.Join(cfg.BaseDir, "wg", "route64-n1.conf"), Table: 67, Mark: 0x43},
+	}
+	cfg.DefaultTunnel = "route64-n1"
+	for _, tn := range cfg.Tunnels {
+		if err := os.MkdirAll(filepath.Dir(tn.WGConf), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tn.WGConf, []byte(old), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// state：一条属于 route64 的记录
+	st := &Store{records: map[string]AccountRecord{
+		"43b3277e.acc1": {Tunnel: "route64", Addr: "2a11:6c7:f07:656::2011", LastUsed: 1},
+		"43b3277e.ok":   {Tunnel: "route64-n1", Addr: "2a11:6c7:f07:6cd::2000", LastUsed: 1},
+	}, next: map[string]uint64{"route64": 3}}
+	b, _ := json.MarshalIndent(storeFile{Records: st.records, Next: st.next}, "", " ")
+	if err := os.WriteFile(cfg.StateFile, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &admin{cfg: cfg, log: log.New(io.Discard, "", 0)}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("DELETE", "/api/tunnels/route64", nil)
+	req.SetPathValue("name", "route64")
+	a.delTunnel(w, req)
+	if w.Code != 200 {
+		t.Fatalf("delTunnel %d %s", w.Code, w.Body.String())
+	}
+	raw, _ := os.ReadFile(cfg.Path)
+	if strings.Contains(string(raw), "43b3277e.acc1") {
+		t.Fatalf("seed 残留未清理:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "43b3277e.keep") {
+		t.Fatal("别的隧道的 seed 被误删")
+	}
+	st2, err := LoadStore(cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st2.Get("43b3277e.acc1"); ok {
+		t.Fatal("state 里的残留记录未删")
+	}
+	if _, ok := st2.Get("43b3277e.ok"); !ok {
+		t.Fatal("别的隧道的账号被误删")
+	}
+}
