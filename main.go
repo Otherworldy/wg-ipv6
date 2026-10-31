@@ -22,6 +22,7 @@ func main() {
 		check      = flag.Bool("check", false, "校验配置与规则生成后退出")
 		unreg      = flag.String("unregister", "", "删除账号粘性映射后退出")
 		skipSystem = flag.Bool("skip-system", false, "冒烟/调试：跳过环境检查与系统规则加载，只起 SOCKS5")
+		migrateSB  = flag.Bool("migrate-singbox", false, "把绑定隧道的入口改成经本机 SOCKS5 出站（每个入口一个粘性账号）")
 	)
 	flag.Parse()
 	logger := log.New(os.Stderr, "proxy-sticky: ", log.LstdFlags|log.Lmsgprefix)
@@ -76,6 +77,13 @@ func main() {
 				t.Conf.Name, t.rulePref(), t.Conf.Mark, t.Conf.Table)
 		}
 		fmt.Println("删除旧表 ip6 route64_random (备份至 backups/)")
+		return
+	}
+
+	if *migrateSB {
+		if err := syncEntryOutbounds(cfg, logger); err != nil {
+			logger.Fatalf("migrate-singbox: %v", err)
+		}
 		return
 	}
 
@@ -145,13 +153,9 @@ func main() {
 	// 策略路由可能被云厂商网络刷新冲掉（只在启动时 EnsureRule 不够）
 	go ensureRuleLoop(logger, tunnels)
 
-	// 粘性账号闲置回收：脱敏，跳过 seed 账号
+	// 粘性账号闲置回收：脱敏，跳过 seed 账号与 sing-box 入口账号
 	if cfg.AccountIdleTTL > 0 {
-		protected := make(map[string]bool, len(cfg.SeedAccounts))
-		for u := range cfg.SeedAccounts {
-			protected[u] = true
-		}
-		go reapLoop(logger, srv, store, tunnels, protected, cfg.AccountIdleTTL)
+		go reapLoop(logger, srv, store, tunnels, cfg, cfg.AccountIdleTTL)
 	}
 
 	if cfg.AdminListen != "" {
@@ -170,6 +174,7 @@ func main() {
 		logger.Fatalf("listen %s: %v (sing-box 占用 26183 时请改 listen 或停用其 socks5-in)", cfg.Listen, err)
 	}
 	logger.Printf("listening %s, default_account=%s, tunnels=%d", cfg.Listen, cfg.DefaultAccount, len(tunnels))
+
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -199,10 +204,18 @@ func seedAccount(store *Store, tunnels []*Tunnel, username, addrStr string) erro
 }
 
 // reapLoop 周期性回收闲置粘性账号：删除 state 记录、接口地址并清 ensured 缓存。
-func reapLoop(logger *log.Logger, srv *Server, store *Store, tunnels []*Tunnel, protected map[string]bool, ttl time.Duration) {
+// 入口账号（sing-box 里 ps-* 出站用的用户名）必须永久固定，每轮重新扫描后跳过。
+func reapLoop(logger *log.Logger, srv *Server, store *Store, tunnels []*Tunnel, cfg *Config, ttl time.Duration) {
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
 	for range tick.C {
+		protected := make(map[string]bool, len(cfg.SeedAccounts))
+		for u := range cfg.SeedAccounts {
+			protected[u] = true
+		}
+		for u := range entryAccounts(cfg) {
+			protected[u] = true
+		}
 		removed := store.ReapIdle(time.Now(), ttl, protected)
 		for _, e := range removed {
 			addr, err := netip.ParseAddr(e.Rec.Addr)

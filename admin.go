@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,6 +74,7 @@ func (a *admin) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/tunnels/{name}", a.auth(a.delTunnel))
 	mux.HandleFunc("GET /api/inbounds", a.auth(a.listInbounds))
 	mux.HandleFunc("POST /api/inbounds", a.auth(a.addInbound))
+	mux.HandleFunc("POST /api/inbounds/{tag}/users", a.auth(a.batchUsers))
 	mux.HandleFunc("PUT /api/inbounds/{tag}", a.auth(a.putInbound))
 	mux.HandleFunc("DELETE /api/inbounds/{tag}", a.auth(a.delInbound))
 	mux.HandleFunc("PUT /api/socks", a.auth(a.putSocks))
@@ -321,8 +323,20 @@ func (a *admin) addTunnel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "网卡已存在: "+name)
 		return
 	}
-	table, mark := nextTableMark(a.cfg.Tunnels)
-	pool, start, sticky := poolDefaults(a.cfg.Tunnels)
+	// 以磁盘上的配置为准：addTunnel 后进程会异步重启，连发两次请求时内存里的
+	// a.cfg.Tunnels 还是旧的，会算出重复的 table/mark
+	tunnels := a.cfg.Tunnels
+	if fresh, ferr := LoadConfig(a.cfg.Path); ferr == nil {
+		tunnels = fresh.Tunnels
+	}
+	table, mark := nextTableMark(tunnels)
+	for _, t := range tunnels {
+		if t.Table == table || t.Mark == mark {
+			writeErr(w, 409, "table/mark 冲突，稍后重试")
+			return
+		}
+	}
+	pool, start, sticky := poolDefaults(tunnels)
 	tc := TunnelConf{Name: name, WGConf: "wg/" + name + ".conf", Table: table, Mark: mark, PoolSize: pool, PoolStart: start, StickyStart: sticky}
 	wgPath := filepath.Join(a.cfg.BaseDir, "wg", name+".conf")
 	if err := os.MkdirAll(filepath.Dir(wgPath), 0o755); err != nil {
@@ -350,7 +364,7 @@ func (a *admin) addTunnel(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]any{"ok": true, "name": name, "table": table, "mark": mark, "restarting": true}
 	if req.InboundPort > 0 {
-		if err := a.cloneVLESSForTunnel(name, mark, req.InboundPort, req.CloneFrom); err != nil {
+		if err := a.cloneVLESSForTunnel(name, req.InboundPort, req.CloneFrom); err != nil {
 			resp["inbound_error"] = err.Error()
 		} else {
 			resp["inbound_port"] = req.InboundPort
@@ -361,7 +375,7 @@ func (a *admin) addTunnel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-func (a *admin) cloneVLESSForTunnel(tun string, mark, port int, cloneFrom string) error {
+func (a *admin) cloneVLESSForTunnel(tun string, port int, cloneFrom string) error {
 	inb, _, _, err := loadSB(a.cfg.SingBoxDir)
 	if err != nil {
 		return err
@@ -386,7 +400,9 @@ func (a *admin) cloneVLESSForTunnel(tun string, mark, port int, cloneFrom string
 		nb["listen_port"] = port
 		refreshCreds(nb)
 		inb.Inbounds = append(inb.Inbounds, nb)
-		attachTunnelOutbound(ob, rt, tag, tun, mark)
+		if err := attachTunnelOutbound(a.cfg, ob, rt, tag, tun); err != nil {
+			return err
+		}
 		upsertShareURL(a.cfg.SingBoxDir, port, port, nb, srcPort)
 		return nil
 	})
@@ -489,26 +505,31 @@ func (a *admin) delTunnel(w http.ResponseWriter, r *http.Request) {
 	_ = os.Rename(tc.WGConf, bak)
 	disabled := loadDisabled(a.cfg)
 	moved := []string{}
+	resp := map[string]any{"ok": true, "restarting": true, "disabled_inbounds": moved}
 	if err := applySingBox(a.cfg.SingBoxDir, func(inb *inbFile, ob *obFile, rt map[string]any) error {
-		moved = stripTunnelFromSB(inb, ob, rt, name, disabled)
+		moved = stripTunnelFromSB(a.cfg, inb, ob, rt, name, disabled)
 		return nil
 	}); err != nil {
+		// 隧道本身已删除，但 sing-box 配置没改成：必须明说，不能让界面以为成功
 		a.log.Printf("admin del tunnel %s: sing-box %v", name, err)
+		resp["singbox_error"] = err.Error()
+		resp["warning"] = "隧道已删除，但 sing-box 配置更新失败，绑定它的入口可能需要手工修正"
 	} else {
 		_ = saveDisabled(a.cfg, disabled)
 	}
 	a.log.Printf("admin del tunnel %s", name)
 	restartProxySticky()
-	writeJSON(w, map[string]any{"ok": true, "restarting": true, "disabled_inbounds": moved})
+	resp["disabled_inbounds"] = moved
+	writeJSON(w, resp)
 }
 
-func (a *admin) tunnelMark(name string) (int, bool) {
+func (a *admin) hasTunnel(name string) bool {
 	for _, t := range a.cfg.Tunnels {
 		if t.Name == name {
-			return t.Mark, true
+			return true
 		}
 	}
-	return 0, false
+	return false
 }
 
 func (a *admin) listInbounds(w http.ResponseWriter, r *http.Request) {
@@ -533,7 +554,7 @@ func (a *admin) listInbounds(w http.ResponseWriter, r *http.Request) {
 		row := map[string]any{
 			"tag": tag, "type": asString(ib["type"]), "listen": asString(ib["listen"]),
 			"listen_port": port, "enabled": enabled, "outbound": obtag,
-			"tunnel": outboundBind(ob, obtag),
+			"tunnel":  outboundTunnel(a.cfg, ob, obtag),
 			"reality": reality, "url": shareURLOf(a.cfg.SingBoxDir, port, ib),
 		}
 		rows = append(rows, row)
@@ -551,6 +572,7 @@ func (a *admin) addInbound(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		CloneFrom  string `json:"clone_from"`
 		Tag        string `json:"tag"`
+		Type       string `json:"type"`
 		ListenPort int    `json:"listen_port"`
 		Tunnel     string `json:"tunnel"`
 	}
@@ -572,26 +594,25 @@ func (a *admin) addInbound(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	src := pickClone(inb.Inbounds, req.CloneFrom)
-	if src == nil {
-		writeErr(w, 400, "克隆源不存在")
-		return
-	}
-	srcPort := asInt(src["listen_port"])
-	mark := 0
-	if req.Tunnel != "" {
-		found := false
-		for _, t := range a.cfg.Tunnels {
-			if t.Name == req.Tunnel {
-				mark = t.Mark
-				found = true
-				break
-			}
-		}
-		if !found {
-			writeErr(w, 400, "没有这条隧道")
+	var src map[string]any
+	if req.Type != "" {
+		// 只有 socks 能凭空创建：其它类型要 TLS 证书/传输参数，必须克隆现有入口
+		if req.Type != "socks" {
+			writeErr(w, 400, "只有 socks 入口支持从零创建，其它类型请克隆现有入口")
 			return
 		}
+		src = map[string]any{"type": "socks", "listen": "::"}
+	} else {
+		src = pickClone(inb.Inbounds, req.CloneFrom)
+		if src == nil {
+			writeErr(w, 400, "克隆源不存在")
+			return
+		}
+	}
+	srcPort := asInt(src["listen_port"])
+	if req.Tunnel != "" && !a.hasTunnel(req.Tunnel) {
+		writeErr(w, 400, "没有这条隧道")
+		return
 	}
 	_ = backupSBFiles(a.cfg.SingBoxDir, filepath.Join(a.cfg.BaseDir, "backups"))
 	err = applySingBox(a.cfg.SingBoxDir, func(inb *inbFile, ob *obFile, rt map[string]any) error {
@@ -607,11 +628,29 @@ func (a *admin) addInbound(w http.ResponseWriter, r *http.Request) {
 		nb["tag"] = tag
 		nb["listen_port"] = req.ListenPort
 		refreshCreds(nb)
+		isSocks := asString(nb["type"]) == "socks"
+		if isSocks {
+			// 没有 users[] 的 socks 入站是开放代理，给一个默认账号
+			nb["users"] = []any{map[string]any{"username": tag, "password": randPassword(16)}}
+		}
 		inb.Inbounds = append(inb.Inbounds, nb)
 		if req.Tunnel != "" {
-			attachTunnelOutbound(ob, rt, tag, req.Tunnel, mark)
+			if err := attachTunnelOutbound(a.cfg, ob, rt, tag, req.Tunnel); err != nil {
+				return err
+			}
 		}
-		upsertShareURL(a.cfg.SingBoxDir, req.ListenPort, req.ListenPort, nb, srcPort)
+		if isSocks {
+			if host := publicHost(a.cfg.SingBoxDir); host != "" {
+				u := nb["users"].([]any)[0].(map[string]any)
+				line := fmt.Sprintf("socks5://%s:%s@%s:%d#%s", url.QueryEscape(asString(u["username"])),
+					url.QueryEscape(asString(u["password"])), host, req.ListenPort, tag)
+				if err := saveURLLines(a.cfg.SingBoxDir, append(loadURLLines(a.cfg.SingBoxDir), line)); err != nil {
+					return fmt.Errorf("写 url.txt: %w", err)
+				}
+			}
+		} else {
+			upsertShareURL(a.cfg.SingBoxDir, req.ListenPort, req.ListenPort, nb, srcPort)
+		}
 		return nil
 	})
 	if err != nil {
@@ -669,12 +708,14 @@ func (a *admin) putInbound(w http.ResponseWriter, r *http.Request) {
 		if req.Tunnel != nil {
 			if *req.Tunnel == "" {
 				removeRoutesForInbound(rt, tag)
+				dropPSOutbound(ob, tag)
 			} else {
-				mark, ok := a.tunnelMark(*req.Tunnel)
-				if !ok {
+				if !a.hasTunnel(*req.Tunnel) {
 					return fmt.Errorf("没有这条隧道")
 				}
-				attachTunnelOutbound(ob, rt, tag, *req.Tunnel, mark)
+				if err := attachTunnelOutbound(a.cfg, ob, rt, tag, *req.Tunnel); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -698,6 +739,7 @@ func (a *admin) delInbound(w http.ResponseWriter, r *http.Request) {
 			port = asInt(ib["listen_port"])
 			inb.Inbounds = append(inb.Inbounds[:i], inb.Inbounds[i+1:]...)
 			removeRoutesForInbound(rt, tag)
+			dropPSOutbound(ob, tag)
 			return nil
 		}
 		i, ib = findInbound(disabled.Inbounds, tag)
@@ -706,6 +748,9 @@ func (a *admin) delInbound(w http.ResponseWriter, r *http.Request) {
 		}
 		port = asInt(ib["listen_port"])
 		disabled.Inbounds = append(disabled.Inbounds[:i], disabled.Inbounds[i+1:]...)
+		// 停用态入口的规则/出站也要清，否则一次残留 N 条批量出站
+		removeRoutesForInbound(rt, tag)
+		dropPSOutbound(ob, tag)
 		return nil
 	})
 	if err != nil {
@@ -756,6 +801,14 @@ func (a *admin) putSocks(w http.ResponseWriter, r *http.Request) {
 	if err := writeYAMLDoc(a.cfg.Path, doc); err != nil {
 		writeErr(w, 500, err.Error())
 		return
+	}
+	// 入口出站回链到本程序的 listen，端口变了要同步重写，否则所有入口断流
+	if req.Listen != "" {
+		a.cfg.Listen = req.Listen
+		if err := syncEntryOutbounds(a.cfg, a.log); err != nil {
+			writeErr(w, 500, "listen 已写入，但 sing-box 入口出站未更新: "+err.Error())
+			return
+		}
 	}
 	restartProxySticky()
 	writeJSON(w, map[string]any{"ok": true, "restarting": true})

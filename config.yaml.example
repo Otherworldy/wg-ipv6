@@ -1,5 +1,5 @@
 # proxy-sticky 配置示例（复制为 config.yaml 并修改）
-listen: "0.0.0.0:26184"          # SOCKS5 监听（避开 sing-box 26183 或先停用其 socks5-in）
+listen: "0.0.0.0:26184"          # SOCKS5 监听（也是 sing-box 入口回链的目标，本机自动用 127.0.0.1）
 password: "CHANGE_ME"            # 共享密码，与客户端 socks5 密码一致
 default_account: "43b3277e"      # 不带后缀的用户名 -> 随机出口走 numgen 池
 default_tunnel: "route64"        # 默认隧道名（对应 tunnels[].name）

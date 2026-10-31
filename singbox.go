@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,7 +27,7 @@ type obFile struct {
 }
 
 var (
-	singboxBin = "/etc/sing-box/sing-box"
+	singboxBin     = "/etc/sing-box/sing-box"
 	restartSingBox = func() error {
 		return exec.Command("systemctl", "restart", "sing-box").Run()
 	}
@@ -45,7 +47,11 @@ func writeJSONFile(path string, v any) error {
 		return err
 	}
 	b = append(b, '\n')
-	return os.WriteFile(path, b, 0o644)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func loadSB(dir string) (*inbFile, *obFile, map[string]any, error) {
@@ -73,7 +79,6 @@ func writeSB(dir string, inb *inbFile, ob *obFile, rt map[string]any) error {
 	}
 	return writeJSONFile(filepath.Join(dir, "route.json"), rt)
 }
-
 func checkSB(dir string) error {
 	if _, err := os.Stat(singboxBin); err != nil {
 		return nil
@@ -85,7 +90,11 @@ func checkSB(dir string) error {
 	return nil
 }
 
+var sbMu sync.Mutex // applySingBox 串行化：避免并发改写三份 json 互相覆盖
+
 func applySingBox(dir string, mut func(inb *inbFile, ob *obFile, rt map[string]any) error) error {
+	sbMu.Lock()
+	defer sbMu.Unlock()
 	inb, ob, rt, err := loadSB(dir)
 	if err != nil {
 		return err
@@ -241,14 +250,65 @@ func matchInboundTag(inb any, tag string) bool {
 	return false
 }
 
-func outboundBind(ob *obFile, obTag string) string {
+// psSocksAddr 返回本机 proxy-sticky SOCKS5 的 loopback 地址（sing-box 出站回链目标）。
+func psSocksAddr(cfg *Config) (host string, port int, err error) {
+	h, p, err := net.SplitHostPort(cfg.Listen)
+	if err != nil {
+		return "", 0, fmt.Errorf("listen %q: %w", cfg.Listen, err)
+	}
+	if port, err = strconv.Atoi(p); err != nil || port <= 0 || port > 65535 {
+		return "", 0, fmt.Errorf("listen %q: 端口不合法", cfg.Listen)
+	}
+	switch strings.Trim(h, "[]") {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::":
+		host = "::1"
+	default:
+		host = strings.Trim(h, "[]")
+	}
+	return host, port, nil
+}
+
+// psAccount 入口 inTag 在 proxy-sticky 上的固定账号：<default_account>.<tunnel>.<tag>。
+// 该用户名被 parseAccount 解析为「指定隧道的粘性账号」，即一个入口固定一个 /128 出口。
+func psAccount(cfg *Config, tun, inTag string) string {
+	return cfg.DefaultAccount + "." + tun + "." + inTag
+}
+
+func psOutboundTag(inTag string) string { return "ps-" + inTag }
+
+// tunnelOfAccount 从 <default_account>.<tunnel>.<tag> 反解隧道名。
+func tunnelOfAccount(cfg *Config, user string) string {
+	rest, ok := strings.CutPrefix(user, cfg.DefaultAccount+".")
+	if !ok {
+		return ""
+	}
+	tun, _, ok := strings.Cut(rest, ".")
+	if !ok {
+		return ""
+	}
+	for _, t := range cfg.Tunnels {
+		if t.Name == tun {
+			return tun
+		}
+	}
+	return ""
+}
+
+// outboundTunnel 返回出站关联的隧道名：ps-* 出站从账号反解，旧出站看 bind_interface。
+func outboundTunnel(cfg *Config, ob *obFile, obTag string) string {
 	if ob == nil || obTag == "" || obTag == "direct" {
 		return ""
 	}
 	for _, o := range ob.Outbounds {
-		if asString(o["tag"]) == obTag {
-			return asString(o["bind_interface"])
+		if asString(o["tag"]) != obTag {
+			continue
 		}
+		if asString(o["type"]) == "socks" {
+			return tunnelOfAccount(cfg, asString(o["username"]))
+		}
+		return asString(o["bind_interface"])
 	}
 	return ""
 }
@@ -271,6 +331,58 @@ func outboundOf(rt map[string]any, tag string) string {
 func prependRoute(rt map[string]any, tag, outbound string) {
 	rule := map[string]any{"inbound": []any{tag}, "outbound": outbound}
 	setRouteRules(rt, append([]any{rule}, routeRules(rt)...))
+}
+
+func prependRouteAuthUser(rt map[string]any, inTag, authUser, outbound string) {
+	rule := map[string]any{"inbound": []any{inTag}, "auth_user": []any{authUser}, "outbound": outbound}
+	setRouteRules(rt, append([]any{rule}, routeRules(rt)...))
+}
+
+// removePlainRoutesForInbound 只删除该入口「不带 auth_user」的规则，保留按用户分流的规则。
+func removePlainRoutesForInbound(rt map[string]any, tag string) {
+	var keep []any
+	for _, r := range routeRules(rt) {
+		m, _ := r.(map[string]any)
+		if m != nil && matchInboundTag(m["inbound"], tag) && len(authUsersOf(m)) == 0 {
+			continue
+		}
+		keep = append(keep, r)
+	}
+	setRouteRules(rt, keep)
+}
+
+func authUsersOf(m map[string]any) []any {
+	l, _ := m["auth_user"].([]any)
+	return l
+}
+
+// insertPlainRoute 把入口的通用规则插到该入口所有 auth_user 规则之后：
+// sing-box 顺序匹配，通用规则若排在前面，按用户分流的规则就永远命中不了。
+func insertPlainRoute(rt map[string]any, inTag, outbound string) {
+	rules := routeRules(rt)
+	pos := 0
+	for i, r := range rules {
+		m, _ := r.(map[string]any)
+		if m != nil && matchInboundTag(m["inbound"], inTag) && len(authUsersOf(m)) > 0 {
+			pos = i + 1
+		}
+	}
+	rule := map[string]any{"inbound": []any{inTag}, "outbound": outbound}
+	rules = append(rules[:pos], append([]any{rule}, rules[pos:]...)...)
+	setRouteRules(rt, rules)
+}
+
+// removeRoutesForAuthUser 删除该入口按用户分流的旧规则（按 auth_user 精确匹配，不动其它规则）。
+func removeRoutesForAuthUser(rt map[string]any, inTag, authUser string) {
+	var keep []any
+	for _, r := range routeRules(rt) {
+		m, _ := r.(map[string]any)
+		if m != nil && matchInboundTag(m["inbound"], inTag) && matchInboundTag(m["auth_user"], authUser) {
+			continue
+		}
+		keep = append(keep, r)
+	}
+	setRouteRules(rt, keep)
 }
 
 func removeRoutesForInbound(rt map[string]any, tag string) {
@@ -297,34 +409,149 @@ func removeRoutesForOutbound(rt map[string]any, obTags map[string]bool) {
 	setRouteRules(rt, keep)
 }
 
-func attachTunnelOutbound(ob *obFile, rt map[string]any, inTag, tun string, mark int) string {
-	obTag := "wg-" + tun
-	found := false
-	for _, o := range ob.Outbounds {
-		if asString(o["tag"]) == obTag {
-			found = true
-			break
-		}
+// attachTunnelOutbound 让入口 inTag 经本机 proxy-sticky 的 SOCKS5 出站：
+// 账号固定为 <default_account>.<tunnel>.<tag>，由 proxy-sticky 分配粘性 IPv6 出口，
+// 因此每个入口一个账号、一个固定源地址（不再是 direct + bind_interface + numgen 池）。
+// psOutboundConfig 构造回链本程序 SOCKS5 的出站配置。
+func psOutboundConfig(cfg *Config, obTag, acct string) (map[string]any, error) {
+	host, port, err := psSocksAddr(cfg)
+	if err != nil {
+		return nil, err
 	}
-	if !found {
-		ob.Outbounds = append(ob.Outbounds, map[string]any{
-			"type":             "direct",
-			"tag":              obTag,
-			"domain_strategy":  "ipv6_only",
-			"bind_interface":   tun,
-			"routing_mark":     mark,
-		})
+	if len(acct) > 200 {
+		return nil, fmt.Errorf("账号名过长: %s", acct)
 	}
-	removeRoutesForInbound(rt, inTag)
-	prependRoute(rt, inTag, obTag)
-	return obTag
+	return map[string]any{
+		"type":        "socks",
+		"tag":         obTag,
+		"server":      host,
+		"server_port": port,
+		"version":     "5",
+		"username":    acct,
+		"password":    cfg.Password,
+		"network":     "tcp", // proxy-sticky 只做 TCP CONNECT，UDP 不走这里
+	}, nil
 }
 
-func stripTunnelFromSB(inb *inbFile, ob *obFile, rt map[string]any, tun string, disabled *inbFile) []string {
+func upsertOutbound(ob *obFile, nb map[string]any) {
+	tag := asString(nb["tag"])
+	for i, o := range ob.Outbounds {
+		if asString(o["tag"]) == tag {
+			ob.Outbounds[i] = nb
+			return
+		}
+	}
+	ob.Outbounds = append(ob.Outbounds, nb)
+}
+
+func attachTunnelOutbound(cfg *Config, ob *obFile, rt map[string]any, inTag, tun string) error {
+	obTag := psOutboundTag(inTag)
+	nb, err := psOutboundConfig(cfg, obTag, psAccount(cfg, tun, inTag))
+	if err != nil {
+		return err
+	}
+	upsertOutbound(ob, nb)
+	// 每用户出站跟着换隧道/端口，保留各自 id，auth_user 规则不动
+	for i, o := range ob.Outbounds {
+		id, ok := psUserID(inTag, asString(o["tag"]))
+		if !ok {
+			continue
+		}
+		unb, err := psOutboundConfig(cfg, asString(o["tag"]), psAccount(cfg, tun, inTag+"-"+id))
+		if err != nil {
+			return err
+		}
+		ob.Outbounds[i] = unb
+	}
+	// 只重写「不带 auth_user」的通用规则，按用户分流的规则要留着
+	removePlainRoutesForInbound(rt, inTag)
+	insertPlainRoute(rt, inTag, obTag)
+	pruneTunnelOutbounds(ob, rt)
+	return nil
+}
+
+// attachUserOutbound 给入口里的单个用户分配独立出站：账号 <acc>.<隧道>.<入口>-<id>，
+// 并用 auth_user 规则把该用户（users[].name / socks 的 username）分流到它。
+func attachUserOutbound(cfg *Config, ob *obFile, rt map[string]any, inTag, tun, id, authUser string) (string, error) {
+	obTag := psUserOutboundTag(inTag, id)
+	nb, err := psOutboundConfig(cfg, obTag, psAccount(cfg, tun, inTag+"-"+id))
+	if err != nil {
+		return "", err
+	}
+	upsertOutbound(ob, nb)
+	removeRoutesForAuthUser(rt, inTag, authUser)
+	prependRouteAuthUser(rt, inTag, authUser, obTag)
+	return obTag, nil
+}
+
+func psUserOutboundTag(inTag, id string) string { return "psu-" + inTag + "-" + id }
+
+// psUserID 反向解析 psu-<inTag>-<8位hex>。后缀必须是 8 位小写 hex，
+// 否则 "vless-a" 会误吃邻居入口 "vless-a-b" 的出站。
+func psUserID(inTag, obTag string) (string, bool) {
+	rest, ok := strings.CutPrefix(obTag, "psu-"+inTag+"-")
+	if !ok || len(rest) != 8 {
+		return "", false
+	}
+	for _, c := range rest {
+		if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') {
+			return "", false
+		}
+	}
+	return rest, true
+}
+
+// pruneTunnelOutbounds 删除已无引用的旧「direct + bind_interface」隧道出站。
+// 只清理本程序旧版本生成的 wg-<接口名> 形式，手写的出站不碰；嵌套引用
+// （logical 子规则、selector/urltest、dns.detour）无法完全枚举，故宁少勿多。
+func pruneTunnelOutbounds(ob *obFile, rt map[string]any) {
+	used := map[string]bool{}
+	if r, ok := rt["route"].(map[string]any); ok {
+		used[asString(r["final"])] = true
+		if sets, ok := r["rule_set"].([]any); ok {
+			for _, s := range sets {
+				if m, ok := s.(map[string]any); ok {
+					used[asString(m["download_detour"])] = true
+				}
+			}
+		}
+	}
+	for _, r := range routeRules(rt) {
+		if m, ok := r.(map[string]any); ok {
+			used[asString(m["outbound"])] = true
+		}
+	}
+	var keep []map[string]any
+	for _, o := range ob.Outbounds {
+		tag := asString(o["tag"])
+		legacy := asString(o["type"]) == "direct" && tag == "wg-"+asString(o["bind_interface"])
+		if legacy && !used[tag] {
+			continue
+		}
+		keep = append(keep, o)
+	}
+	ob.Outbounds = keep
+}
+
+// dropPSOutbound 入站不再绑定隧道/被删除时，删掉它名下的 socks 出站（含每用户出站）。
+func dropPSOutbound(ob *obFile, inTag string) {
+	var keep []map[string]any
+	for _, o := range ob.Outbounds {
+		if tag := asString(o["tag"]); tag == psOutboundTag(inTag) {
+			continue
+		} else if _, ok := psUserID(inTag, tag); ok {
+			continue
+		}
+		keep = append(keep, o)
+	}
+	ob.Outbounds = keep
+}
+
+func stripTunnelFromSB(cfg *Config, inb *inbFile, ob *obFile, rt map[string]any, tun string, disabled *inbFile) []string {
 	dropOB := map[string]bool{}
 	var keepOB []map[string]any
 	for _, o := range ob.Outbounds {
-		if asString(o["bind_interface"]) == tun {
+		if outboundTunnel(cfg, ob, asString(o["tag"])) == tun {
 			dropOB[asString(o["tag"])] = true
 			continue
 		}
@@ -345,6 +572,145 @@ func stripTunnelFromSB(inb *inbFile, ob *obFile, rt map[string]any, tun string, 
 	inb.Inbounds = keepIn
 	removeRoutesForOutbound(rt, dropOB)
 	return moved
+}
+
+// migrateInbounds 把绑定了隧道、但还在用旧 direct+bind_interface 出站的入口，
+// 改成经本机 proxy-sticky 的 SOCKS5 出站（每个入口一个固有粘性账号）。
+// syncEntryOutbounds 让 sing-box 的入口出站与本程序的 listen 地址保持一致：
+//   - 旧版 direct+bind_interface（绑了已知隧道）-> 改成 socks5 回链
+//   - 已是 ps-* 但 server/port 与当前 listen 不符（改了监听端口）-> 重写
+//
+// 幂等；没有要改的就不写盘、不重启 sing-box。
+func syncEntryOutbounds(cfg *Config, logger *log.Logger) error {
+	inb, ob, rt, err := loadSB(cfg.SingBoxDir)
+	if err != nil {
+		return err
+	}
+	host, port, err := psSocksAddr(cfg)
+	if err != nil {
+		return err
+	}
+	known := make(map[string]bool, len(cfg.Tunnels))
+	for _, t := range cfg.Tunnels {
+		known[t.Name] = true
+	}
+	type job struct{ tag, tun string }
+	var jobs []job
+	scan := func(list []map[string]any) {
+		for _, ib := range list {
+			tag := asString(ib["tag"])
+			tun := entryTunnel(cfg, ob, rt, tag)
+			if !known[tun] {
+				continue
+			}
+			if !entryOutboundsStale(cfg, ob, tag, host, port) {
+				continue
+			}
+			jobs = append(jobs, job{tag, tun})
+		}
+	}
+	scan(inb.Inbounds)
+	scan(loadDisabled(cfg).Inbounds)
+	if len(jobs) == 0 {
+		logger.Printf("sync-singbox: 没有需要更新的入口")
+		return nil
+	}
+	if err := backupSBFiles(cfg.SingBoxDir, filepath.Join(cfg.BaseDir, "backups")); err != nil {
+		return fmt.Errorf("备份 sing-box 配置失败: %w", err)
+	}
+	err = applySingBox(cfg.SingBoxDir, func(inb *inbFile, ob *obFile, rt map[string]any) error {
+		for _, j := range jobs {
+			if err := attachTunnelOutbound(cfg, ob, rt, j.tag, j.tun); err != nil {
+				return fmt.Errorf("%s: %w", j.tag, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, j := range jobs {
+		logger.Printf("sync-singbox: %s -> socks5 %s:%d (账号 %s)", j.tag, host, port, psAccount(cfg, j.tun, j.tag))
+	}
+	return nil
+}
+
+// psOutboundMatches 出站是否已指向当前 listen。
+func psOutboundMatches(ob *obFile, obTag, host string, port int) bool {
+	for _, o := range ob.Outbounds {
+		if asString(o["tag"]) != obTag {
+			continue
+		}
+		return asString(o["server"]) == host && asInt(o["server_port"]) == port &&
+			asString(o["network"]) == "tcp" &&
+			asString(o["username"]) != "" && asString(o["password"]) != ""
+	}
+	return false
+}
+
+// entryTunnel 取入口当前绑定的隧道：共享出站 -> 每用户出站 -> 旧规则。
+func entryTunnel(cfg *Config, ob *obFile, rt map[string]any, inTag string) string {
+	if tun := outboundTunnel(cfg, ob, psOutboundTag(inTag)); tun != "" {
+		return tun
+	}
+	for _, o := range ob.Outbounds {
+		if _, ok := psUserID(inTag, asString(o["tag"])); ok {
+			if tun := tunnelOfAccount(cfg, asString(o["username"])); tun != "" {
+				return tun
+			}
+		}
+	}
+	return outboundTunnel(cfg, ob, outboundOf(rt, inTag))
+}
+
+// entryOutboundsStale 判断入口的出站是否还指向当前 listen（共享出站与每用户出站都要看）。
+func entryOutboundsStale(cfg *Config, ob *obFile, inTag, host string, port int) bool {
+	if !psOutboundMatches(ob, psOutboundTag(inTag), host, port) {
+		return true
+	}
+	for _, o := range ob.Outbounds {
+		if _, ok := psUserID(inTag, asString(o["tag"])); !ok {
+			continue
+		}
+		if !psOutboundMatches(ob, asString(o["tag"]), host, port) {
+			return true
+		}
+		if tunnelOfAccount(cfg, asString(o["username"])) == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// entryAccounts 返回 sing-box 入口占用的账号（<acc>.<tunnel>.<tag>[/ -id]），
+// 用于跳过闲置回收：入口账号必须永久固定，地址不能变。
+func entryAccounts(cfg *Config) map[string]bool {
+	inb, ob, rt, err := loadSB(cfg.SingBoxDir)
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	scan := func(list []map[string]any) {
+		for _, ib := range list {
+			tag := asString(ib["tag"])
+			if outboundOf(rt, tag) == "direct" {
+				continue
+			}
+			shared := psOutboundTag(tag)
+			for _, o := range ob.Outbounds {
+				ot := asString(o["tag"])
+				if _, ok := psUserID(tag, ot); ot != shared && !ok {
+					continue
+				}
+				if u := asString(o["username"]); tunnelOfAccount(cfg, u) != "" {
+					out[u] = true
+				}
+			}
+		}
+	}
+	scan(inb.Inbounds)
+	scan(loadDisabled(cfg).Inbounds)
+	return out
 }
 
 func publicHost(sbDir string) string {
@@ -381,11 +747,7 @@ func loadURLLines(sbDir string) []string {
 }
 
 func saveURLLines(sbDir string, lines []string) error {
-	p := urlTxtPath(sbDir)
-	if _, err := os.Stat(p); err != nil {
-		return nil
-	}
-	return os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+	return os.WriteFile(urlTxtPath(sbDir), []byte(strings.Join(lines, "\n")+"\n"), 0o600)
 }
 
 func sharePort(line string) int {
@@ -487,25 +849,37 @@ func upsertShareURL(sbDir string, oldPort, newPort int, ib map[string]any, clone
 	if lines == nil {
 		return
 	}
+	if oldPort == newPort {
+		return
+	}
 	tag := asString(ib["tag"])
 	uuid, password := inboundCreds(ib)
 	user, pass := uuid, password
 	if uuid == "" {
 		user, pass = password, ""
 	}
-	idx := findURLByPort(lines, oldPort)
-	if idx < 0 && cloneFromPort > 0 {
-		idx = findURLByPort(lines, cloneFromPort)
-		if idx >= 0 {
-			lines = append(lines, setSharePortAndUser(lines[idx], newPort, user, pass, tag))
-			_ = saveURLLines(sbDir, lines)
-			return
+	hit := 0
+	for i, line := range lines {
+		if sharePort(line) != oldPort || oldPort == 0 {
+			continue
 		}
+		// 保留各自凭据与备注，只换端口；入口自身那一行顺带刷新凭据
+		if hit == 0 && tag != "" {
+			lines[i] = setSharePortAndUser(line, newPort, user, pass, tag)
+		} else {
+			lines[i] = setSharePortAndUser(line, newPort, "", "", "")
+		}
+		hit++
 	}
-	if idx >= 0 {
-		lines[idx] = setSharePortAndUser(lines[idx], newPort, user, pass, tag)
+	if hit > 0 {
 		_ = saveURLLines(sbDir, lines)
 		return
+	}
+	if cloneFromPort > 0 {
+		if idx := findURLByPort(lines, cloneFromPort); idx >= 0 {
+			lines = append(lines, setSharePortAndUser(lines[idx], newPort, user, pass, tag))
+			_ = saveURLLines(sbDir, lines)
+		}
 	}
 }
 
@@ -622,6 +996,9 @@ func backupSBFiles(dir, destDir string) error {
 		return err
 	}
 	ts := time.Now().Format("20060102-150405")
+	if b, err := os.ReadFile(urlTxtPath(dir)); err == nil {
+		_ = os.WriteFile(filepath.Join(destDir, "url.txt."+ts), b, 0o600)
+	}
 	for _, n := range []string{"inbounds.json", "outbounds.json", "route.json"} {
 		b, err := os.ReadFile(filepath.Join(dir, n))
 		if err != nil {

@@ -136,6 +136,9 @@ func (c *Config) validate(base string) error {
 			return fmt.Errorf("tunnels: duplicate name %q", t.Name)
 		}
 		seen[t.Name] = true
+		if strings.Contains(t.Name, ".") {
+			return fmt.Errorf("tunnels[%d]: name %q 不能包含 '.'（入口账号 <账号>.<隧道>.<入口> 靠它分割）", i, t.Name)
+		}
 		if !filepath.IsAbs(t.WGConf) {
 			t.WGConf = filepath.Join(base, t.WGConf)
 		}

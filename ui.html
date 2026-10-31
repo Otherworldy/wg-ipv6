@@ -779,14 +779,39 @@ textarea {
     <div class="form-group">
       <label class="form-label">绑定出口</label>
       <select id="editInboundTun">
-        <option value="">direct (走本机 IPv4 出口)</option>
+        <option value="">direct (走本机原生出口)</option>
       </select>
       <div class="form-desc">可随时将常规协议入口接入 Route64 专属 IPv6 隧道</div>
     </div>
   </div>
   <div class="modal-footer">
     <button onclick="$('dlgEditInbound').close()">取消</button>
+    <button id="editBatchBtn">批量生成节点</button>
     <button class="btn-primary" id="saveInboundBtn">保存修改</button>
+  </div>
+</dialog>
+
+<!-- Dialog 7: 批量生成节点 (Batch Nodes) -->
+<dialog id="dlgBatch">
+  <div class="modal-header">
+    <div class="modal-title" id="batchTitle">批量生成节点</div>
+    <button class="modal-close" onclick="$('dlgBatch').close()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label class="form-label">生成数量</label>
+      <input id="batchCount" type="number" min="1" max="100" value="5">
+      <div class="form-desc" id="batchHint">每个节点一条独立凭据 + 独立固定 IPv6 出口（1-100）</div>
+    </div>
+    <div class="form-group" id="batchResultBox" style="display:none;">
+      <label class="form-label" id="batchResultLabel">生成结果</label>
+      <textarea id="batchResult" rows="8" readonly style="font-family:ui-monospace,monospace;font-size:11px;"></textarea>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button onclick="$('dlgBatch').close()">关闭</button>
+    <button id="batchCopyBtn" style="display:none;">复制全部</button>
+    <button class="btn-primary" id="batchGenBtn">生成</button>
   </div>
 </dialog>
 
@@ -813,7 +838,7 @@ textarea {
     <div class="form-group">
       <label class="form-label">出口走向</label>
       <select id="directAddTun">
-        <option value="">direct (走本机 IPv4 出口)</option>
+        <option value="">direct (走本机原生出口)</option>
       </select>
     </div>
   </div>
@@ -1008,6 +1033,7 @@ function renderLines() {
           <button onclick="openDetails('${esc(tun.name)}')">
             <span>📋</span> 链接详情
           </button>
+          ${ib ? `<button onclick="openBatchUsers('${esc(ib.tag)}')"><span>👥</span> 批量节点</button>` : ''}
           ${ib ? `<button onclick="openEditInbound('${esc(ib.tag)}')"><span>⚙️</span> 改入口</button>` : ''}
         </div>
       </div>
@@ -1105,6 +1131,43 @@ window.quickMakeInbound = async function(tunName) {
   }
 };
 
+window.openBatchUsers = function(tag) {
+  const ib = state.inbounds.find(x => x.tag === tag);
+  $('batchTitle').textContent = `批量生成节点 - ${tag}`;
+  $('batchHint').textContent = ib && ib.tunnel
+    ? `${ib.type} 入口 · 出口 ${ib.tunnel} · 每个节点独立固定 IPv6 地址（1-100）`
+    : `${ib ? ib.type : ''} 入口 · 未绑定出口，先给它选一个粘性 IPv6 出口（1-100）`;
+  $('batchCount').value = 5;
+  $('batchResult').value = '';
+  $('batchResultBox').style.display = 'none';
+  $('batchCopyBtn').style.display = 'none';
+  $('batchGenBtn').disabled = false;
+  $('batchGenBtn').textContent = '生成';
+  $('batchGenBtn').onclick = async () => {
+    const count = parseInt($('batchCount').value, 10);
+    if (!count || count < 1 || count > 100) { toast('数量需要 1-100', true); return; }
+    $('batchGenBtn').disabled = true;
+    $('batchGenBtn').textContent = '生成中...';
+    try {
+      const r = await api('POST', '/api/inbounds/' + encodeURIComponent(tag) + '/users', { count });
+      const lines = (r.nodes || []).map(n => n.url).filter(Boolean);
+      $('batchResult').value = lines.join('\n');
+      $('batchResultLabel').textContent = `生成结果（${lines.length} 个${r.kind}节点，出口 ${r.tunnel}）`;
+      $('batchResultBox').style.display = 'flex';
+      $('batchCopyBtn').style.display = '';
+      $('batchCopyBtn').onclick = () => copyText($('batchResult').value, '全部节点');
+      toast(`已生成 ${lines.length} 个节点`);
+      await load();
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      $('batchGenBtn').disabled = false;
+      $('batchGenBtn').textContent = '生成';
+    }
+  };
+  $('dlgBatch').showModal();
+};
+
 window.openEditInbound = function(tag) {
   const ib = state.inbounds.find(x => x.tag === tag);
   if (!ib) return;
@@ -1112,8 +1175,13 @@ window.openEditInbound = function(tag) {
   $('editInboundPort').value = ib.listen_port;
 
   // Options
-  const tunOpts = state.tunnels.map(t => `<option value="${esc(t.name)}" ${ib.tunnel === t.name ? 'selected' : ''}>Route64 出口: ${esc(t.name)}</option>`).join('');
-  $('editInboundTun').innerHTML = '<option value="">direct (走本机 IPv4 出口)</option>' + tunOpts;
+  const tunOpts = state.tunnels.map(t => `<option value="${esc(t.name)}" ${ib.tunnel === t.name ? 'selected' : ''}>粘性 IPv6 出口: ${esc(t.name)}</option>`).join('');
+  $('editInboundTun').innerHTML = '<option value="">direct (走本机原生出口)</option>' + tunOpts;
+
+  $('editBatchBtn').onclick = () => {
+    $('dlgEditInbound').close();
+    openBatchUsers(tag);
+  };
 
   $('saveInboundBtn').onclick = async () => {
     const port = parseInt($('editInboundPort').value, 10);
@@ -1213,11 +1281,11 @@ $('submitAddLine').onclick = async () => {
 // Add Direct Inbound Modal
 $('openAddDirectBtn').onclick = () => {
   const inbs = state.inbounds.filter(x => x.enabled);
-  $('directCloneFrom').innerHTML = inbs.map(x => `<option value="${esc(x.tag)}">${esc(x.tag)} (${x.type}:${x.listen_port})</option>`).join('');
+  $('directCloneFrom').innerHTML = '<option value="__socks__">＋ 新建 socks 入口（从零创建）</option>' + inbs.map(x => `<option value="${esc(x.tag)}">${esc(x.tag)} (${x.type}:${x.listen_port})</option>`).join('');
   $('directAddTag').value = '';
   $('directAddPort').value = '';
-  const tunOpts = state.tunnels.map(t => `<option value="${esc(t.name)}">Route64 出口: ${esc(t.name)}</option>`).join('');
-  $('directAddTun').innerHTML = '<option value="">direct (走本机 IPv4 出口)</option>' + tunOpts;
+  const tunOpts = state.tunnels.map(t => `<option value="${esc(t.name)}">粘性 IPv6 出口: ${esc(t.name)}</option>`).join('');
+  $('directAddTun').innerHTML = '<option value="">direct (走本机原生出口)</option>' + tunOpts;
   $('dlgAddDirect').showModal();
 };
 
@@ -1228,13 +1296,10 @@ $('submitAddDirect').onclick = async () => {
   const tun = $('directAddTun').value;
   if (!tag) { toast('请输入名称', true); return; }
   if (!port) { toast('请输入端口', true); return; }
+  const body = { tag, listen_port: port, tunnel: tun };
+  if (clone === '__socks__') body.type = 'socks'; else body.clone_from = clone;
   try {
-    await api('POST', '/api/inbounds', {
-      clone_from: clone,
-      tag,
-      listen_port: port,
-      tunnel: tun
-    });
+    await api('POST', '/api/inbounds', body);
     $('dlgAddDirect').close();
     toast(`已添加入口 ${tag}`);
     await load();

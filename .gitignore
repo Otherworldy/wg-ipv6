@@ -6,3 +6,4 @@ runtime/
 backups/
 bin/
 *.log
+.pi/
